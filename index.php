@@ -5,27 +5,152 @@ $textl = 'Игра ' . (isset($arr['kubok_nomi']) ? $arr['kubok_nomi'] : '');
 
 require_once("../incfiles/core.php");
 require_once("../incfiles/head.php");
-require_once("../game/func_game.php");
 
 // Инициализация переменных
 $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $act = isset($_GET['act']) ? $_GET['act'] : '';
 $datauser = isset($datauser) ? $datauser : [];
-$realtime = time(); // Добавлена инициализация
+$realtime = time();
 
 $prefix = !empty($_GET['union']) ? '_union_' : '_';
 $issetun = !empty($_GET['union']) ? '&amp;union=isset' : '';
 $dirs = !empty($_GET['union']) ? '/union/' : '/';
 
 // Запрос к базе с использованием MySQLi
-// Стало (используем параметризованные запросы):
 $stmt = $db->prepare("SELECT * FROM `r{$prefix}game` WHERE id = ? LIMIT 1");
 $stmt->bind_param('i', $id);
 $stmt->execute();
 $g = $stmt->get_result();
 $game = $g ? mysqli_fetch_array($g) : [];
 
-// JavaScript для переключения вкладок
+// Функция симуляции матча
+function simulate_game($db, $game_id, $prefix) {
+    // Инициализация матча
+    $events = [];
+    $score1 = 0;
+    $score2 = 0;
+    $yellow1 = [];
+    $yellow2 = [];
+    $red1 = [];
+    $red2 = [];
+
+    // Генерация событий матча
+    for ($minute = 1; $minute <= 90; $minute++) {
+        $eventType = rand(1, 100);
+        
+        // Гол (10% шанс)
+        if ($eventType <= 10) {
+            $scoringTeam = rand(1, 2);
+            $playerId = rand(1, 11);
+            
+            if ($scoringTeam == 1) {
+                $score1++;
+                $events[] = "$minute|goal1|Гол! Игрок $playerId забивает гол!";
+            } else {
+                $score2++;
+                $events[] = "$minute|goal2|Гол! Игрок $playerId забивает гол!";
+            }
+        }
+        // Желтая карточка (5% шанс)
+        elseif ($eventType <= 15) {
+            $cardTeam = rand(1, 2);
+            $playerId = rand(1, 11);
+            
+            if ($cardTeam == 1) {
+                $yellow1[] = $playerId;
+                $events[] = "$minute|yellow|Игрок $playerId получает желтую карточку";
+            } else {
+                $yellow2[] = $playerId;
+                $events[] = "$minute|yellow|Игрок $playerId получает желтую карточку";
+            }
+        }
+        // Красная карточка (2% шанс)
+        elseif ($eventType <= 17) {
+            $cardTeam = rand(1, 2);
+            $playerId = rand(1, 11);
+            
+            if ($cardTeam == 1) {
+                $red1[] = $playerId;
+                $events[] = "$minute|red|Игрок $playerId получает красную карточку";
+            } else {
+                $red2[] = $playerId;
+                $events[] = "$minute|red|Игрок $playerId получает красную карточку";
+            }
+        }
+        // Стандартное событие
+        else {
+            $events[] = "$minute|event|Обычный момент в матче";
+        }
+    }
+
+    // Добавление финального свистка
+    $events[] = "90|finish|Матч завершен!";
+
+    // Сохранение событий
+    $eventsStr = implode("\n", $events);
+    mysqli_query($db, "UPDATE `r{$prefix}game` SET events = '" . mysqli_real_escape_string($db, $eventsStr) . "' WHERE id = $game_id");
+
+    // Обновление счета
+    mysqli_query($db, "UPDATE `r{$prefix}game` SET rez1 = $score1, rez2 = $score2 WHERE id = $game_id");
+
+    // Обновление статистики игроков
+    foreach ($yellow1 as $player) {
+        mysqli_query($db, "UPDATE r_player SET yc = yc + 1 WHERE id = $player");
+    }
+    foreach ($yellow2 as $player) {
+        mysqli_query($db, "UPDATE r_player SET yc = yc + 1 WHERE id = $player");
+    }
+    foreach ($red1 as $player) {
+        mysqli_query($db, "UPDATE r_player SET rc = rc + 1 WHERE id = $player");
+    }
+    foreach ($red2 as $player) {
+        mysqli_query($db, "UPDATE r_player SET rc = rc + 1 WHERE id = $player");
+    }
+}
+
+// Проверка необходимости запуска матча
+if ($game && $game['time'] <= $realtime && $game['go1'] == 1 && $game['go2'] == 1 && empty($game['rez1']) && empty($game['rez2'])) {
+    // Запуск симуляции матча
+    simulate_game($db, $id, $prefix);
+    
+    // Обновление данных игры
+    $stmt = $db->prepare("SELECT * FROM `r{$prefix}game` WHERE id = ? LIMIT 1");
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
+    $g = $stmt->get_result();
+    $game = $g ? mysqli_fetch_array($g) : [];
+    
+    // Перенаправление на страницу отчета
+    header('location: /report'.$dirs.''.$id);
+    exit;
+}
+
+// Функция из func_game.php
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+
+    // Стили для вывода
+    $styles = '<style>
+        table.game_comments { border-collapse: separate; border-spacing: 0; width: 99%; }
+        table.game_comments td { padding: 5px; }
+        table.game_comments td:nth-child(1){ color: #bd2828; vertical-align: top; }
+        table.game_comments td:nth-child(2){ text-align: left; }
+        table.game_comments td img.__ico { vertical-align: middle; margin-right: 5px; }
+        table.game_comments .__logo { float: left; margin: 3px 3px 3px 0; }
+        table.game_comments tr:nth-child(n+2) .__logo { display: none; }
+        table.game_comments tr:nth-child(1) td { text-align: left; font-size: 15px; vertical-align: top; }
+        table.game_comments tr:nth-child(1) b { font-weight: normal; }
+        table.game_comments tr.event_12 td, tr.event_15 td, tr.event_19 td { background-color: #E1FECF; }
+        table.game_comments tr.event_-11 { background-color: #ffd2e0; }
+        table.game_comments tr.event_-7 { background-color: #ffffe1; }
+        table.game_comments tr.event_-9, tr.event_-19 { background-color: #fdded7; }
+    </style>';
+    
+    echo $styles;
+
+  
+
 ?>
 <script>
 $(function() {
@@ -92,21 +217,8 @@ div.team_name2 {
     overflow: hidden;
 }
 </style>
-
 <?php
 
-// Основная логика
-if (empty($game)) {
-    echo '<div class="rmenu">Игра не найдена</div>';
-    require_once("../incfiles/end.php");
-    exit;
-}
-
-// Перемещено выше: проверка счета матча ДО вывода судьи
-if (!empty($game['rez1']) || !empty($game['rez2']) || $game['rez1'] == '0' || $game['rez2'] == '0') {
-    header('location: /report'.$dirs.''.$id);
-    exit;
-}
 
 // Проверка отмены игры
 if (empty($game['id']) || empty($game['id_team1']) || empty($game['id_team2'])) {
@@ -1181,7 +1293,372 @@ if ($game['go1'] != 1 || $game['go2'] != 1) {
         echo '</div><div id="h2hdiv" class="content">';
 
         // Подключение файла с историей
-        require_once("../game/history3.php");
+       if($datauser['black'] != 1){
+?>
+<style>
+
+.game-ui__header {
+    color: #000;
+    background: url(/images/bgs/squard-top-active2.png) repeat-x #8dc578;
+    padding: 3px;
+    margin-top: 5px;
+    text-align: center;
+    opacity: 0.8;
+}
+.game-ui__last-games tr {
+    background-color: #ddf6d1;
+    height: 25px;
+}
+
+</style>
+<?
+}
+else{
+?>
+<style>
+
+.game-ui__header {
+    color: #e8e8e8;
+    background: url(/images/bgs/squard-top-active22.png) repeat-x #000;
+    padding: 3px;
+    margin-top: 5px;
+    text-align: center;
+    opacity: 0.8;
+}
+.game-ui__last-games tr {
+    background-color: #282828;
+    height: 25px;
+}
+
+</style>
+
+<?
+}
+
+// echo'<div class="game-ui__header wide_format">последние результаты</div>';
+echo'<div class="phdr" style="text-align:center">последние результаты</div>';
+
+
+///////////////History games
+
+$qqo1 = mysql_query("SELECT * FROM `r_game` where (`id_team1`='".$kom1['id']."' and `id_team2`='".$kom2['id']."'and (`rez1`!='' or `rez2`!='') ) or (`id_team2`='".$kom1['id']."' and `id_team1`='".$kom2['id']."' and (`rez1`!='' or `rez2`!='') )  order by time desc LIMIT 15;");
+// $qqo2 = mysql_query("SELECT * FROM `r_game` where  `id_team2`='".$kom2[id]."' order by time desc LIMIT 15;");
+
+$totalfsss = mysql_num_rows($qqo1);
+if($totalfsss){
+
+
+
+
+echo '<table cellpadding="2" cellspacing="0" style="width:100%;" class="game-ui__last-games">';
+echo '<tbody>';
+?>
+
+
+<style>
+
+a.penint_result_1 {
+	font-size: 7px;
+    background-color: #5f9b3b;
+}a.penint_result_1, a.penint_result_0, a.penint_result_-1 {
+    // background-color: #b02e2e;
+    color: #fff;
+	font-size: 7px;
+    padding: 2px;
+    border-radius: 2px;
+    text-decoration: none;
+    opacity: 0.9;
+}
+a.penint_result_-1 {
+    background-color: #b02e2e;
+    color: #fff;
+		font-size: 7px;
+    padding: 2px;
+    border-radius: 2px;
+    text-decoration: none;
+    opacity: 0.9;
+}
+
+</style>
+<?
+
+$k6 = @mysql_query("select * from `r_team` where id='" . $datauser[manager2] . "' LIMIT 1;");
+$kom = @mysql_fetch_array($k6);
+while ($res = mysql_fetch_array($qqo1))
+{
+$k1 = @mysql_query("select * from `r_team` where id='" . $res[id_team1] . "' LIMIT 1;");
+$kom1 = @mysql_fetch_array($k1);
+
+$k2 = @mysql_query("select * from `r_team` where id='" . $res[id_team2] . "' LIMIT 1;");
+$kom2 = @mysql_fetch_array($k2);
+// echo is_integer($i / 2) ? '<tr class="oddrows">' : '<tr class="evenrows">';
+
+	
+
+echo'<tr class="roster-games__line  roster-games__final">';
+echo' <td class="center" style="padding:0;">
+                                                                    <p style="font-size: 10px;">';
+if(date("d.m.y", $res['time']) == date("d.m.y", $realtime) ){									
+echo'<span style="color:#A9A9A9;"><span class="today">Сегодня</span></span>';
+								}
+								else{
+echo''.date("d.m.y", $res['time']).'';
+								}
+echo'   </p>                                                              </td>
+                                <td class="center" >
+                                    <a href="/'.$res[chemp].'" class="original" >';
+
+									switch($res[chemp]){
+										
+										case "cup_netto":
+										$nnn='Куб.Нетто';
+										break;
+										
+										case "cup_charlton":
+										$nnn='Куб.Чарльтона';
+										break;
+										
+										case "cup_muller":
+										$nnn='Куб.Мюллера';
+										break;
+										
+										case "cup_puskas":
+										$nnn='Куб.Пушкаша';
+										break;
+										
+										case "cup_fachetti":
+										$nnn='Куб.Факкетти';
+										break;
+										
+										case "cup_kopa":
+										$nnn='Куб.Копа';
+										break;
+										
+										case "cup_distefano":
+										$nnn='Куб.Ди Стефано';
+										break;
+										case "cup_garrinca":
+										$nnn='Куб.Гарринчи';
+										break;
+										
+										case "frend":
+										$nnn='Тов.матч';
+										break;
+										
+										case "champ_retro":
+										$nnn='Чемп. '.$res[tur].' тур';
+										break;
+										case "champ":
+										$nnn='Чемп. '.$res[tur].' тур';
+										break;
+										
+										case "unchamp":
+										$nnn='СЧ';
+										break;
+										case "le":
+										$nnn='Кубок УЕФА';
+										break;
+										
+										case "liga_r":
+										$nnn='КЕЧ';
+										break;
+										case "maradonna":
+										$nnn='Кубок Марадонны';
+										break;
+										case "cup":
+										$nnn='Кубок';
+										break;
+										case "brendcup":
+										$nnn='Бренд.Кубок';
+										break;
+										case "paynetcup":
+										$nnn='PAYNET.Кубок';
+										break;
+										case "commercup":
+										$nnn='Коммер.Кубок';
+										break;
+										case "butcercup":
+										$nnn='Коммер.Кубок';
+										break;
+										case "super_cup":
+										$nnn='Супер Кубок';
+										break;
+										case "vsch":
+										$nnn='ВСЧ';
+										break;
+										case "msch":
+										$nnn='МСЧ';
+										break;
+										case "eusebio":
+										$nnn='Кубок Эйсебио';
+										break;
+										
+										default :
+										$nnn='Матч';
+										break;
+									// '.$res['chemp'].'
+									
+									}
+									echo'<p style="font-size: 10px;">'.$nnn.'</p></a>                                </td>
+                                <td>
+                                    <div style="height:100%; overflow:hidden;">';if ($kom[name] == $kom2[name])
+{
+echo '<span class="flags c_'.$kom1[flag].'_14"  title="'.$kom1[flag].'"></span><a href="/team/' . $res['id_team1'] . '" > '.$kom1[name].'';
+}
+else
+{
+echo '<span class="flags c_'.$kom2[flag].'_14"  title="'.$kom2[flag].'"></span><a href="/team/' . $res['id_team2'] . '" > '.$kom2[name].'';
+}
+echo'</a>                                    </div>
+                                </td>';
+								
+								
+					
+if (!empty($res[rez1]) || !empty($res[rez2]) || $res[rez1] == '0' || $res[rez2] == '0')
+{
+	
+
+
+
+	
+		if($res[id_team1] == $kom[id]){
+			if( $res[rez1] > $res[rez2]){
+					echo'<td class="center">
+                                    <a href="/game/' . $res['id'] . '" class="int_result_1">
+                                                                                    '.$res[rez1].':'.$res[rez2].'                                                                           </a>
+                                </td><td class="center"><a class="rw">W</a> </td>';	
+								}
+								else	if( $res[rez1] < $res[rez2]){
+							echo'<td class="center">
+                                    <a href="/game/' . $res['id'] . '" class="int_result_-1">
+                                                                                    '.$res[rez1].':'.$res[rez2].'                                                                           </a>
+                                </td><td class="center"><a class="rl">L</a> </td>';
+								}
+								else{
+									
+		
+		
+			
+		echo'<td class="center">
+                                    <a href="/game/' . $res['id'] . '" class="int_result_0">
+                                                                                  '.$res[rez1].':'.$res[rez2].'                                                                      </a>
+                             ';
+							 if($res[chemp] !='frend'){
+							 if($kom[id] == $kom1[id]){
+								 	 /////////////Пенальти в чужой команде
+							  if($res[pen1] > $res[pen2]){
+echo'						 <br> <br>  <a href="/game/' . $res['id'] . '" class="penint_result_1">('.$res[pen1].':'.$res[pen2].')</a> ';
+							  }
+							  else{
+				echo'		 <br>	 <br><a href="/game/' . $res['id'] . '" class="penint_result_-1">('.$res[pen1].':'.$res[pen2].')</a> ';  
+							  }							 }
+							 else{
+								 /////////////Пенальти в твоей команде
+													  if($res[pen2] > $res[pen1]){
+echo'						 <br> <br> <a href="/game/' . $res['id'] . '" class="penint_result_1">('.$res[pen1].':'.$res[pen2].')</a> ';
+							  }
+							  else{
+				echo'		 <br> <br> 	<a href="/game/' . $res['id'] . '" class="penint_result_-1">('.$res[pen1].':'.$res[pen2].')</a> ';  
+							  }	 
+							 }}
+echo' </td><td class="center">        <a class="rd">D</a>                                                                </td>';
+								}
+								
+
+	}
+		elseif($res[id_team2] == $kom[id]){
+			if( $res[rez2] > $res[rez1]){
+					echo'<td class="center">
+                                    <a href="/game/' . $res['id'] . '" class="int_result_1">
+                                                                                    '.$res[rez1].':'.$res[rez2].'                                                                           </a>
+                                </td><td class="center"><a class="rw">W</a> </td>';	}
+								else	if( $res[rez2] < $res[rez1]){
+							echo'<td class="center">
+                                    <a href="/game/' . $res['id'] . '" class="int_result_-1">
+                                                                                    '.$res[rez1].':'.$res[rez2].'                                                                           </a>
+                                </td><td class="center"><a class="rl">L</a> </td>';
+								}
+								
+								else{
+									
+		
+		
+			
+		echo'<td class="center">
+                                    <a href="/game/' . $res['id'] . '" class="int_result_0">
+                                                                                  '.$res[rez1].':'.$res[rez2].'                                                                      </a>
+                             ';
+							 if($res[chemp] !='frend'){
+							 if($kom[id] == $kom1[id]){
+								 	 /////////////Пенальти в чужой команде
+							  if($res[pen1] > $res[pen2]){
+echo'						 <br> <br>  <a href="/game/' . $res['id'] . '" class="penint_result_1">('.$res[pen1].':'.$res[pen2].')</a> ';
+							  }
+							  else{
+				echo'		 <br>	 <br><a href="/game/' . $res['id'] . '" class="penint_result_-1">('.$res[pen1].':'.$res[pen2].')</a> ';  
+							  }							 }
+							 else{
+								 /////////////Пенальти в твоей команде
+													  if($res[pen2] > $res[pen1]){
+echo'						 <br> <br> <a href="/game/' . $res['id'] . '" class="penint_result_1">('.$res[pen1].':'.$res[pen2].')</a> ';
+							  }
+							  else{
+				echo'		 <br> <br> 	<a href="/game/' . $res['id'] . '" class="penint_result_-1">('.$res[pen1].':'.$res[pen2].')</a> ';  
+							  }	 
+							 }}
+echo' </td><td class="center">        <a class="rd">D</a>                                                                </td>';
+								}
+
+	}
+	
+	
+	
+
+}
+else
+{
+echo '<td class="center"><a href="/game/' . $res['id'] . '"><img src="/images/ico/more.gif" title="перейти в матч" alt="матч"></a></td><td class="center">
+                                                                    </td>';
+}
+
+                              
+								
+								echo'
+                            
+                            </tr>';
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+++$i;
+}
+
+echo '                                             	</tbody></table>
+               ';
+
+
+}
+else{
+	
+	echo'<div class="game-ui__history">
+                        <div style="font-size:140%;">
+                            История противостояния
+                            <span class="green">' . $kom1['name'] . ' - ' . $kom2['name'] . '</span>
+                        </div>
+                        <div id="history-prematch" style="margin-bottom:20px;"><br>Данная статистика доступна для владельцев <a href="/vip.php?action=compare&amp;type=1"><img src="/images/ico/vip1.png" title="Улучшенный Премиум-аккаунт" style="width: 40px;border: none;vertical-align: middle;"></a></div>
+                    </div>';
+
+}
 
         echo '</div>';
 
@@ -1588,6 +2065,5 @@ if ($game['chemp'] == 'champ_retro') {
     }
 }
 
-require_once ("../incfiles/end.php");
-exit;
+require_once("../incfiles/end.php");
 ?>
