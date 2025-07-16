@@ -1,6 +1,7 @@
 <?php
 //defined('_IN_JOHNCMS') or die('Error: restricted access');
-
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 function func_text($type, $kom, $minuta, $name) {
     global $arr1, $arr2;
 
