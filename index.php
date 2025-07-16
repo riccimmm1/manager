@@ -1,879 +1,1593 @@
 <?php
 define('_IN_JOHNCMS', 1);
-$headmod = 'mainpage';
-$textl = 'Менеджер';
-require_once('../incfiles/core.php');
+$headmod = 'game';
+$textl = 'Игра ' . (isset($arr['kubok_nomi']) ? $arr['kubok_nomi'] : '');
 
-require_once('../incfiles/head.php');
-require_once('../incfiles/ban.php');
-require_once('../incfiles/code/fakt.php');
+require_once("../incfiles/core.php");
+require_once("../incfiles/head.php");
+require_once("../game/func_game.php");
 
 // Инициализация переменных
-$user_id = (int)$datauser['id'];
-$realtime = time();
+$id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$act = isset($_GET['act']) ? $_GET['act'] : '';
+$datauser = isset($datauser) ? $datauser : [];
+$realtime = time(); // Добавлена инициализация
 
-/**
- * Функция вывода сообщения
- */
-function show_message($text, $color) {
+$prefix = !empty($_GET['union']) ? '_union_' : '_';
+$issetun = !empty($_GET['union']) ? '&amp;union=isset' : '';
+$dirs = !empty($_GET['union']) ? '/union/' : '/';
+
+// Запрос к базе с использованием MySQLi
+// Стало (используем параметризованные запросы):
+$stmt = $db->prepare("SELECT * FROM `r{$prefix}game` WHERE id = ? LIMIT 1");
+$stmt->bind_param('i', $id);
+$stmt->execute();
+$g = $stmt->get_result();
+$game = $g ? mysqli_fetch_array($g) : [];
+
+// JavaScript для переключения вкладок
+?>
+<script>
+$(function() {
+  $(".but").on("click", function(e) {
+    e.preventDefault();
+    $(".content").hide();
+    $("#" + this.id + "div").show();
+  });
+});
+</script>
+<style>
+.content { display:none }
+
+div.tab-a, div.tab-p {
+    background-color: var(--player-primary);
+    border: 1px solid var(--stripy-border);
+    width: 110px;
+    height: 20px;
+    cursor: pointer;
+    vertical-align: middle;
+    text-align: center;
+    font-weight: 100;
+    border-radius: 2px;
+    padding-top: 4px;
+    font-size: 11px;
+}
+
+div.tab-a {
+    color: #fff;
+    background: url("/images/bgs/squard-top-active.png") repeat-x #8dc578;
+}
+
+div.team_name2 {
+    white-space: nowrap;
+    max-width: 50px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#pagewrap {
+   width: 720px;
+   margin: 0 auto;
+}
+@media screen and (max-width: 980px) {
+   #pagewrap {
+      width: 95%;
+   }
+}
+@media screen and (max-width: 650px) {
+  #pagewrap {
+      width: 70%;
+}}
+   
+@media screen and (max-width: 480px) {
+   #pagewrap {
+      width: 55%;
+}}
+   
+
+.game-ui__history {
+    background: var(--game-history);
+    border-top: 2px solid var(--primary-color-border);
+    padding: 8px;
+    overflow: hidden;
+}
+</style>
+
+<?php
+
+// Основная логика
+if (empty($game)) {
+    echo '<div class="rmenu">Игра не найдена</div>';
+    require_once("../incfiles/end.php");
+    exit;
+}
+
+// Перемещено выше: проверка счета матча ДО вывода судьи
+if (!empty($game['rez1']) || !empty($game['rez2']) || $game['rez1'] == '0' || $game['rez2'] == '0') {
+    header('location: /report'.$dirs.''.$id);
+    exit;
+}
+
+// Проверка отмены игры
+if (empty($game['id']) || empty($game['id_team1']) || empty($game['id_team2'])) {
     echo '<div class="cardview-wrapper x-overlay" id="errorMsg">
         <div class="cardview">
             <div class="x-row">
-                <div class="x-col-1 x-vh-center x-color-white x-bg-' . htmlspecialchars($color) . '">
+                <div class="x-col-1 x-vh-center x-font-250 x-color-white x-bg-green">
                     <i class="font-icon">!</i>
                 </div>
                 <div class="x-col-5 x-font-bold x-p-3">
-                    ' . htmlspecialchars($text) . '
-                    <div class="x-pt-3">
-                        <a class="mbtn mbtn-' . htmlspecialchars($color) . '" onclick="toggleVisibility(\'errorMsg\');">Закрыть</a>
-                    </div>
+                    Игра отменена<div class="x-pt-3">
+                    <a class="mbtn mbtn-green" onclick="toggleVisibility(\'errorMsg\');">Закрыть</a>
+                </div>
                 </div>
             </div>
         </div>
     </div>';
-}
-
-/**
- * Функция редиректа назад
- */
-function redirect_back() {
-    $referer = isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : '/';
-    header("Location: " . $referer);
+    require_once ("../incfiles/end.php");
     exit;
 }
 
-// Оптимизация стилей
-$text_color = ($datauser['black'] == 0) ? '#fff' : '#282828';
-$styles = '
+$team1_id = (int)$game['id_team1'];
+$team2_id = (int)$game['id_team2'];
 
-.team-add {
-    text-align: center;
-    border: 1px dashed ' . $text_color . ';
-    color: ' . $text_color . ';
-    cursor: pointer;
-    padding: 3px;
-    opacity: 0.3;
-}
-.team-add:hover {
-    opacity: 1;
-}';
-
-echo "<style>{$styles}</style>";
-
-// Обработка действий
-if (isset($_GET['mod'])) {
-    $mod = mysql_real_escape_string($_GET['mod']);
-    if ($mod == "team" || $mod == "mtj") {
-        // Проверяем, есть ли у пользователя команда в выбранном режиме
-        if (($mod == "team" && !empty($datauser['manager2'])) || 
-            ($mod == "mtj" && !empty($datauser['mtj']))) {
-            mysql_query("UPDATE `users` SET `club` = '$mod' WHERE `id` = '$user_id'");
-            header('Location: /fm/index.php');
-            exit;
-        } else {
-            // Если команды нет, перенаправляем на страницу создания
-            header('Location: /store_teams' . ($mod == "mtj" ? '2' : '') . '.php');
-            exit;
+// Функция автозаполнения состава
+function complite_team($db, $team_id) {
+    $team = [];
+    $sql = mysqli_query($db, "SELECT * FROM `r_team` WHERE `id` = '" . (int)$team_id . "' LIMIT 1");
+    if ($sql && mysqli_num_rows($sql)) {
+        $team = mysqli_fetch_assoc($sql);
+        
+        for ($i = 1; $i <= 11; $i++) {
+            if (empty($team['i' . $i])) {
+                $line_condition = "";
+                if ($i == 1) $line_condition = " AND `line` = '1'";
+                elseif ($i >= 2 && $i <= 4) $line_condition = " AND `line` = '2'";
+                elseif ($i >= 5 && $i <= 9) $line_condition = " AND `line` = '3'";
+                elseif ($i >= 10 && $i <= 11) $line_condition = " AND `line` = '4'";
+                
+                $player_query = mysqli_query($db, 
+                    "SELECT `id` FROM `r_player` 
+                    WHERE `team` = '" . (int)$team_id . "' 
+                    AND `sostav` = '0' 
+                    $line_condition 
+                    ORDER BY `rm` DESC LIMIT 1"
+                );
+                
+                if (!$player_query || !mysqli_num_rows($player_query)) {
+                    $player_query = mysqli_query($db, 
+                        "SELECT `id` FROM `r_player` 
+                        WHERE `team` = '" . (int)$team_id . "' 
+                        AND `sostav` = '0' 
+                        AND `line` != '1' 
+                        ORDER BY `rm` LIMIT 1"
+                    );
+                }
+                
+                if ($player_query && mysqli_num_rows($player_query)) {
+                    $player = mysqli_fetch_assoc($player_query);
+                    if ($player) {
+                        mysqli_query($db, "UPDATE `r_team` SET `i$i` = '" . (int)$player['id'] . "' WHERE `id` = '" . (int)$team_id . "' LIMIT 1");
+                        mysqli_query($db, "UPDATE `r_team` SET `i$i` = '' WHERE `id` != '" . (int)$team_id . "' AND `i$i` = '" . (int)$player['id'] . "'");
+                        mysqli_query($db, "UPDATE `r_player` SET `sostav` = '1' WHERE `id` = '" . (int)$player['id'] . "' LIMIT 1");
+                    }
+                }
+            }
         }
     }
-
-    switch ($mod) {
-        case "ads":
-            if ($datauser['rubl'] >= 10) {
-                mysql_query("UPDATE `users` SET `rubl` = `rubl` - 10, `ads` = '0' WHERE `id` = '$user_id'");
-                show_message('Вы отключили рекламу', 'green');
-            } else {
-                show_message('У тебя не хватает денег!', 'red');
-            }
-            redirect_back();
-            break;
-            
-        case "hints":
-            $set_user['hints'] = 0;
-            $set_user_serialized = serialize($set_user);
-            mysql_query("UPDATE `users` SET `set_user` = '" . mysql_real_escape_string($set_user_serialized) . "' WHERE `id` = '$user_id' LIMIT 1");
-            show_message('Вы отключили подсказки', 'green');
-            header("refresh:1;url=".$_SERVER['HTTP_REFERER']);
-            break;
-            
-        case "ajax":
-            if (!isset($set_user)) $set_user = array();
-            $field = ($mod == "hints") ? "hints" : "ajax";
-            $set_user_serialized = mysql_real_escape_string(serialize($set_user));
-            mysql_query("UPDATE `users` SET `set_user` = '$set_user_serialized' WHERE `id` = '$user_id'");
-            show_message('Вы отключили ' . ($mod == "hints" ? 'подсказки' : 'уведомления'), 'green');
-            redirect_back();
-            break;
-            
-        case "mir80":
-            mysql_query("UPDATE `users` SET `mir` = 'retro80' WHERE `id` = '$user_id'");
-            header('Location: ' . $_SERVER['HTTP_REFERER']);
-            exit;
-            
-        case "mir2000":
-            mysql_query("UPDATE `users` SET `mir` = 'retro2000' WHERE `id` = '$user_id'");
-            header('Location: ' . $_SERVER['HTTP_REFERER']);
-            exit;
-            
-        case "mirvirt":
-            mysql_query("UPDATE `users` SET `mir` = 'virt' WHERE `id` = '$user_id'");
-            header('Location: ' . $_SERVER['HTTP_REFERER']);
-            exit;
-            
-        case "team":
-            mysql_query("UPDATE `users` SET `club` = 'team' WHERE `id` = '$user_id'");
-            header('Location: ' . $_SERVER['HTTP_REFERER']);
-            exit;
-            
-        case "mtj":
-            mysql_query("UPDATE `users` SET `club` = 'mtj' WHERE `id` = '$user_id'");
-            header('Location: ' . $_SERVER['HTTP_REFERER']);
-            exit;
-    }
+    return $team;
 }
 
-// Основная логика - проверяем есть ли у пользователя команда
-if ($datauser['id']) {
-    // Проверяем, есть ли у пользователя команда и является ли он менеджером
-    if ($datauser['club'] == 'team' && !empty($datauser['manager2'])) {
-        // Пользователь имеет команду - показываем основной интерфейс
-        $manager_id = (int)$datauser['manager2'];
-        $qk = mysql_query("SELECT * FROM `r_team` WHERE id = '$manager_id' LIMIT 1");
-        
-        if (mysql_num_rows($qk)) {
-            $kom = mysql_fetch_array($qk);
-        
-            // Уровни команды
-            $oput_levels = array(
-                1 => 100, 2 => 300, 3 => 800, 4 => 2000, 5 => 4000,
-                6 => 7500, 7 => 11000, 8 => 18000, 9 => 25000, 10 => 30000,
-                11 => 40000, 12 => 37000, 13 => 45000, 14 => 55000, 15 => 65000,
-                16 => 77000, 17 => 90000, 18 => 105000, 19 => 125000, 20 => 155000,
-                21 => 1900000
-            );
+// Заполняем составы команд
+$team1 = complite_team($db, $team1_id);
+$team2 = complite_team($db, $team2_id);
 
-            $oput = isset($oput_levels[$kom['level']]) ? $oput_levels[$kom['level']] : 0;
+// Получаем данные команд для вывода
+$kom1 = $team1;
+$kom2 = $team2;
+
+$q1auy = mysqli_query($db, "SELECT * FROM `r_judge` WHERE `id`='".mysqli_real_escape_string($db, $game['judge'])."' LIMIT 1");
+$aayr = $q1auy ? mysqli_fetch_array($q1auy) : [];
             
-            if ($kom['oput'] >= $oput) {
-                $addlevel = $kom['level'] + 1;
-                mysql_query("UPDATE `r_team` SET `level` = '$addlevel' WHERE id = '$manager_id'");
-                
-                // Отправка уведомления
-                $u = mysql_query("SELECT `name` FROM `users` WHERE `id` = '" . (int)$kom['id_admin'] . "' LIMIT 1");
-                if (mysql_num_rows($u)) {
-                    $user = mysql_fetch_assoc($u);
-                    $message = "Поздравляем! \r\n\r\n Ваша команда [color=green] {$kom['name']} [/color] получила [color=green][b]{$addlevel}-й Уровень[/b][/color]";
-                    
-                    mysql_query("INSERT INTO `privat` SET
-                        `user` = '" . mysql_real_escape_string($user['name']) . "',
-                        `user_id` = '1098',
-                        `text` = '" . mysql_real_escape_string($message) . "',
-                        `time` = '$realtime',
-                        `author` = 'system',
-                        `type` = 'in',
-                        `chit` = 'no',
-                        `temka` = 'Новый уровень'");
-                }
-            }
-
-            // Получаем информацию об игроках команды
-            $req = mysql_query("SELECT * FROM `r_player` WHERE `team` = '" . $kom['id'] . "' ORDER BY line ASC, poz ASC");
-            $total = mysql_num_rows($req);
-            $allfizkom = 0;
-            while ($arr = mysql_fetch_array($req)) {
-                $allfizkom += $arr['fiz'];
-            }
-
-            // Получаем информацию о составе команды
-            $player_ids = array_filter(array(
-                $kom['i1'], $kom['i2'], $kom['i3'], $kom['i4'], $kom['i5'], 
-                $kom['i6'], $kom['i7'], $kom['i8'], $kom['i9'], $kom['i10'], $kom['i11']
-            ));
-            
-            $fizsos = 0;
-            $fizkom = 0;
-            if (!empty($player_ids)) {
-                $ids_str = implode("','", array_map('intval', $player_ids));
-                $r = mysql_query("SELECT * FROM `r_player` WHERE `id` IN ('$ids_str') AND `team` = '" . $kom['id'] . "' LIMIT 11");
-
-                $allfizsos = 0;
-                while ($e = mysql_fetch_assoc($r)) {
-                    $allfizsos += $e['fiz'];
-                }
-
-                $fizsos = round($allfizsos / 11);
-                $fizkom = round($allfizkom / max($total, 1));
-            }
-
-            // Определяем аватар пользователя
-            $avatar_path = "../files/avatar/" . $datauser['id'] . ".png";
-            $img = file_exists($avatar_path) 
-                ? '/files/avatar/' . $datauser['id'] . '.png' 
-                : '/images/no_avatar.png';
-
-            // Вывод сообщения об изменении языка
-            if (isset($_GET['ok'])) {
-                echo '<div class="pravmenu"><b><font color="red"><center>' . htmlspecialchars($lng_til['til_ozgartir']) . '</center></font></b></div>';
-            }
-            ?>
-
-            <!-- Основной HTML интерфейс -->
-            <div class="gmenu m_info">
-                <div class="m_avatar_block game-tour-holder">
-                    <div class="m_avatar" style="background-image: url(<?= htmlspecialchars($img) ?>);">
-                        <a href="/avatar.php"><img src="/images/rounder.png" alt="Avatar"/></a>
-                    </div>
-                </div>
-
-                <div class="m_team_block">
-                    <div class="m_team_name_block">
-                        <div class="m_team_name">
-                            <span class="flags c_<?= htmlspecialchars($kom['flag']) ?>_18" style="vertical-align: middle;" title="<?= htmlspecialchars($kom['flag']) ?>"></span> 
-                            <?= htmlspecialchars($kom['name']) ?>
-                        </div>
-                        <div class="m_team_ligue">
-                <?= isset($kom['strana']) && isset($championships[$kom['strana']]) ? htmlspecialchars($championships[$kom['strana']]) : ''; ?>
-            </div>
+if ($aayr) {
+    echo '
+    <div class="game22 game-ui__referee">
+        <div>
+            <b><img src="/images/gen4/whistle.png" class="va" alt=""> Главный арбитр матча</b>
         </div>
-    </div>
+        <div>
+            <a href="/judge/index.php?id='.$aayr['id'].'"><span class="flags c_'.$aayr['flag'].'_18" style="vertical-align: middle;" title="'.$aayr['flag'].'"></span> '.$aayr['name'].'</a>
+        </div>
+    </div>';
+}
 
-                   
-<div class="m_avatar_block2">
-        <?php
-        if ($datauser['club'] == 'team') {
-            if (empty($datauser['manager2'])) {
-                mysql_query("UPDATE `users` SET `club` = 'team' WHERE `id` = '$user_id'");
-                header('Location: /fm/index.php');
-                exit;
+// Восстановление физики и морали для команд
+function restore_team_condition($db, $team_id, $realtime) {
+    $req = mysqli_query($db, "SELECT * FROM `r_player` WHERE `team`='".(int)$team_id."'");
+    while ($arr = mysqli_fetch_array($req)) {
+        if ($arr['fiz'] < 100 || $arr['mor'] != '0') {
+            $rrr = ceil(($realtime - $arr['time'])/900);
+            
+            $fiza = $arr['fiz'] + $rrr;
+            if ($fiza > 100) $fiza = 100;
+            
+            if ($arr['mor'] < 0) {
+                $mor = $arr['mor'] + $rrr;
+                if ($mor > 0) $mor = 0;
+            } elseif ($arr['mor'] > 0) {
+                $mor = $arr['mor'] - $rrr;
+                if ($mor < 0) $mor = 0;
+            } else {
+                $mor = 0;
             }
             
-            $qk5 = mysql_query("SELECT * FROM `r_team` WHERE id_admin = '$user_id' LIMIT 1");
-            $kom = mysql_fetch_assoc($qk5);
-            $qkw = mysql_query("SELECT * FROM `mtj` WHERE id = '" . $datauser['mtj'] . "' LIMIT 1");
-            $mtj = mysql_fetch_assoc($qkw);
-            
-            $team_logo = empty($kom['logo']) ? '/manager/logo/b_0.jpg' : '/manager/logo/big' . $kom['logo'];
-            
-            if (!$datauser['manager2']) {
-                echo '<a class="button1" href="/store_teams.php"><img style="width:56px" src="/images/menu2/team1.png" title="Добавить команду"><span class="fmantext"><div class="team_name7">Добавить команду</div></span></a>';
-            } else {
-                echo '<a class="button1" href="/fm/?mod=team"><img style="width:56px" src="' . htmlspecialchars($team_logo) . '" title="Перейти в управление клубом ' . htmlspecialchars($kom['name']) . '"><span class="fmantext"><div class="team_name7">' . htmlspecialchars($kom['name']) . '</div></span></a>';
-            }
-            
-            if (!$datauser['mtj']) {
-                echo '<a class="button1" href="/store_teams2.php"><img style="width:56px" src="/images/menu2/team2.png" title="Добавить команду"><span class="fmantext"><div class="team_name7">Добавить команду</div></span></a>';
-            } else {
-                echo '<a class="button1" href="/fm/?mod=mtj"><img style="width:56px" src="/manager/mtj/big' . htmlspecialchars($mtj['logo']) . '" title="Перейти в управление клубом ' . htmlspecialchars($mtj['name']) . '"><span class="fmantext"><div class="team_name7">' . htmlspecialchars($mtj['name']) . '</div></span></a>';
+            $rmm = ceil($arr['mas']/100*$fiza);
+            mysqli_query($db, "UPDATE `r_player` SET `fiz`='" . $fiza . "', `mor`='" . $mor . "', `rm`='" . $rmm . "' WHERE id='" . $arr['id'] . "' LIMIT 1");
+        }
+        
+        if (($realtime - $arr['time']) > 30*3600*20) {
+            $voz = $arr['voz']+1;
+            mysqli_query($db, "UPDATE `r_player` SET `time`='" . $realtime . "', `voz`='" . $voz . "' WHERE id='" . $arr['id'] . "' LIMIT 1");
+        }
+    }
+}
+
+// Проверка времени восстановления
+if ($game['time'] < ($realtime - 900)) {
+    restore_team_condition($db, $game['id_team1'], $realtime);
+    restore_team_condition($db, $game['id_team2'], $realtime);
+}
+
+if ($act == "add") {
+    if ($datauser['manager2'] == $game['id_team1']) {
+        mysqli_query($db, "UPDATE `r".$prefix."game` SET `go1`='1' WHERE id='" . (int)$id . "' LIMIT 1");
+    } elseif ($datauser['manager2'] == $game['id_team2']) {
+        mysqli_query($db, "UPDATE `r".$prefix."game` SET `go2`='1' WHERE id='" . (int)$id . "' LIMIT 1");
+    }
+    
+    header('location: /game'.$dirs.''.$id);
+    exit;
+}
+
+// Если нет подтверждения от команд
+if ($game['go1'] != 1 || $game['go2'] != 1) {
+    if ($game['time'] > $realtime) {
+        $ostime = $game['time']-$realtime;
+        $q1 = mysqli_query($db, "SELECT * FROM `r_team` WHERE id='" . (int)$game['id_team1'] . "' LIMIT 1");
+        $arr1 = $q1 ? mysqli_fetch_array($q1) : [];
+        
+        $q2 = mysqli_query($db, "SELECT * FROM `r_team` WHERE id='" . (int)$game['id_team2'] . "' LIMIT 1");
+        $arr2 = $q2 ? mysqli_fetch_array($q2) : [];
+        
+        $k1 = mysqli_query($db, "SELECT * FROM `r_team` WHERE id='" . (int)$game['id_team1'] . "' LIMIT 1");
+        $kom1 = $k1 ? mysqli_fetch_array($k1) : [];
+        
+        $k2 = mysqli_query($db, "SELECT * FROM `r_team` WHERE id='" . (int)$game['id_team2'] . "' LIMIT 1");
+        $kom2 = $k2 ? mysqli_fetch_array($k2) : [];
+        
+        // Определение уровня стадиона
+        $stadium_levels = [
+            75000 => 16,
+            70000 => 15,
+            65000 => 14,
+            60000 => 13,
+            55000 => 12,
+            50000 => 11,
+            45000 => 10,
+            40000 => 9,
+            35000 => 8,
+            30000 => 7,
+            25000 => 6,
+            20000 => 5,
+            15000 => 4,
+            10000 => 3,
+            5000 => 2,
+            0 => 1
+        ];
+        
+        $stadium = 1;
+        foreach ($stadium_levels as $capacity => $level) {
+            if ($kom['stadium'] > $capacity) {
+                $stadium = $level;
+                break;
             }
         }
-        ?>
-    </div>
+        
+        // Определение названия кубка
+        $cup_names = [
+            '1' => 'Кубок чемпионов',
+            '2' => 'Кубок обладателей кубков',
+            '3' => 'Кубок УЕФА',
+            '4' => 'Суперкубок Европы',
+            '5' => 'Межконтинентальный кубок',
+            '6' => 'Кубок чемпионов Азии',
+            '7' => 'Кубок чемпионов Африки',
+            '8' => 'Кубок чемпионов Северной Америки',
+            '9' => 'Кубок чемпионов Южной Америки',
+            '10' => 'Кубок Либертадорес',
+            '11' => 'Кубок Америки',
+            '12' => 'Кубок чемпионов Океании',
+            '13' => 'Золотой кубок КОНКАКАФ',
+            '14' => 'Кубок африканских наций',
+            '15' => 'Кубок Азии',
+            '16' => 'Кубок наций Океании',
+            '17' => 'Золотой кубок',
+            '18' => 'Кубок конфедераций',
+            '19' => 'Чемпионат мира',
+            '20' => 'Чемпионат Европы',
+            '21' => 'Чемпионат Азии',
+            '22' => 'Чемпионат Африки',
+            '23' => 'Чемпионат Северной Америки',
+            '24' => 'Чемпионат Южной Америки',
+            '25' => 'Чемпионат Океании',
+            '26' => 'Кубок чемпионов СНГ',
+            '27' => 'Кубок чемпионов Балтии',
+            '28' => 'Кубок чемпионов Скандинавии',
+            '29' => 'Кубок чемпионов Бенилюкса',
+            '30' => 'Кубок чемпионов Балкан',
+            '31' => 'Кубок чемпионов Центральной Европы',
+            '32' => 'Кубок чемпионов Восточной Европы',
+            '33' => 'Кубок чемпионов Западной Европы',
+            '34' => 'Кубок чемпионов Южной Европы',
+            '35' => 'Кубок чемпионов Северной Европы',
+            '36' => 'Кубок чемпионов Средиземноморья',
+            '37' => 'Кубок чемпионов Балтийского моря',
+            '38' => 'Кубок чемпионов Северного моря',
+            '39' => 'Кубок чемпионов Атлантики',
+            '40' => 'Кубок чемпионов Альп',
+            '41' => 'Кубок чемпионов Пиренеев',
+            '42' => 'Кубок чемпионов Карпат',
+            '43' => 'Кубок чемпионов Апеннин',
+            '44' => 'Кубок чемпионов Британских островов',
+            '45' => 'Кубок чемпионов Иберии',
+            '46' => 'Кубок чемпионов Скандинавии и Балтии',
+            '47' => 'Кубок чемпионов Центральной Америки',
+            '48' => 'Кубок чемпионов Карибского бассейна',
+            '49' => 'Кубок чемпионов Анд',
+            '50' => 'Кубок чемпионов Гвиан',
+            '60' => 'Кубок Интертото',
+            '61' => 'Суперкубок Англии',
+            '62' => 'Суперкубок Испании',
+            '63' => 'Суперкубок Италии',
+            '64' => 'Суперкубок Германии',
+            '65' => 'Суперкубок Франции',
+            '66' => 'Суперкубок Португалии',
+            '67' => 'Суперкубок Нидерландов',
+            '68' => 'Суперкубок Бельгии',
+            '69' => 'Суперкубок Шотландии',
+            '70' => 'Суперкубок Турции',
+            '71' => 'Суперкубок Греции',
+            '72' => 'Суперкубок России',
+            '73' => 'Суперкубок Украины',
+            '74' => 'Суперкубок Беларуси',
+            '75' => 'Суперкубок Польши',
+            '76' => 'Суперкубок Чехии',
+            '77' => 'Суперкубок Австрии',
+            '78' => 'Суперкубок Швейцарии',
+            '79' => 'Суперкубок Швеции',
+            '80' => 'Суперкубок Норвегии',
+            '81' => 'Суперкубок Дании',
+            '82' => 'Суперкубок Финляндии',
+            '83' => 'Суперкубок Румынии',
+            '84' => 'Суперкубок Болгарии',
+            '85' => 'Суперкубок Сербии',
+            '86' => 'Суперкубок Хорватии',
+            '87' => 'Суперкубок Словении',
+            '88' => 'Суперкубок Словакии',
+            '89' => 'Суперкубок Венгрии',
+            '90' => 'Суперкубок Боснии',
+            '91' => 'Суперкубок Черногории',
+            '92' => 'Суперкубок Македонии',
+            '93' => 'Суперкубок Албании',
+            '94' => 'Суперкубок Литвы',
+            '95' => 'Суперкубок Латвии',
+            '96' => 'Суперкубок Эстонии',
+            '97' => 'Суперкубок Молдовы',
+            '98' => 'Суперкубок Грузии',
+            '99' => 'Суперкубок Армении',
+            '100' => 'Суперкубок Азербайджана',
+            '101' => 'Суперкубок Казахстана',
+            '102' => 'Суперкубок Узбекистана',
+            '103' => 'Суперкубок Туркменистана',
+            '104' => 'Суперкубок Кыргызстана',
+            '105' => 'Суперкубок Таджикистана',
+            '106' => 'Суперкубок Ирана',
+            '107' => 'Суперкубок Ирака',
+            '108' => 'Суперкубок Саудовской Аравии',
+            '109' => 'Кубок вызова',
+            '150' => 'Кубок легенд',
+            '151' => 'Кубок ветеранов',
+            '152' => 'Кубок молодёжи',
+            '153' => 'Кубок надежд',
+            '154' => 'Кубок будущего',
+            '155' => 'Кубок талантов',
+            '156' => 'Кубок звёзд',
+            '157' => 'Кубок мастеров',
+            '158' => 'Кубок профессионалов',
+            '159' => 'Кубок любителей',
+            '160' => 'Кубок новичков',
+            'cup_netto' => 'Кубок Нетто',
+            'cup_charlton' => 'Кубок Чарльтона',
+            'cup_en' => 'Кубок Англии',
+            'cup_muller' => 'Кубок Мюллера',
+            'cup_puskas' => 'Кубок Пушкаша',
+            'cup_fachetti' => 'Кубок Факкетти',
+            'cup_kopa' => 'Кубок Копа',
+            'cup_distefano' => 'Кубок Ди Стефано'
+        ];
+        
+        $c_name = isset($cup_names[$game['kubok']]) ? $cup_names[$game['kubok']] : 'Неизвестный кубок';
+        
+        // Общие стили и структура для большинства случаев
+        function renderCommonCup($game, $type, $link, $css, $imgPrefix = 'b_') {
+            echo '<link rel="stylesheet" href="/theme/cups/' . $css . '.css" type="text/css" />';
+            echo '<div class="phdr_' . $type . '" style="text-align:left"><font color="white"><a href="' . $link . '">' . $game['kubok_nomi'] . '</a></font><b class="rlink"><font color="white">' . date("d.m.Y H:i", $game['time']) . '</b></font></div>';
+            echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center">';
+            echo '<img src="/images/cup/' . $imgPrefix . $game['id_kubok'] . '.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+        }
 
-                <div class="m_team_logo">
-                    <?php if ($kom['retro'] == 0): ?>
-                        <a href="/team/logo.php?act=up_logo&amp;id=<?= (int)$kom['id'] ?>"></a>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <?php if (isset($kom['sponsor']) && $kom['sponsor'] != '0'): ?>
-                <?php 
-                $arr9 = mysql_fetch_array(mysql_query("SELECT * FROM `sponsor` WHERE id = '" . $kom['sponsor'] . "'"));
-                $lost = isset($kom['lost']) ? (int)$kom['lost'] : 0;
-                $limit = isset($arr9['limit']) ? (int)$arr9['limit'] : 1;
-                $width = ($lost / max($limit, 1)) * 100;
-                ?>
-                <table class="m_team_level_table" style="">
-                    <tr>
-                        <td>
-                            <div class="m_team_level_num game-tour-holder">
-                                <a href="/sponsor/">Спонсор <?= htmlspecialchars(isset($arr9['name']) ? $arr9['name'] : '') ?></a>
-                            </div>
-                        </td>
-                        <td style="width: 100%;" class="tooltip">
-                            <span class="tooltip-text tooltip-top">Лимит поражений: <?= $lost ?>/<?= $limit ?></span>
-                            <div class="m_team_level_pbar2 game-tour-holder">
-                                <div style="width: <?= $width ?>%;"></div>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-            <?php endif; ?>
-
-            <div class="phdr m_team_level" style="overflow: visible;">
-                <div class="m_time_wrap">
-                    <div id="m_time" onclick="setShowHide(this.id); return false;" class="m_time" style="display: none;">
-                        <?= date("d.m.Y H:i:s", $realtime) ?>
-                    </div>
-                </div>
+        // Специальные случаи
+        switch ($game['chemp']) {
+            // Национальные кубки
+            case "cup_en":
+            case "cup_ru":
+            case "cup_de":
+            case "cup_pt":
+            case "cup_es":
+            case "cup_it":
+            case "cup_fr":
+            case "cup_nl":
+                $act = str_replace('cup_', '', $game['chemp']);
+                echo '<link rel="stylesheet" href="/theme/cups/cup.css" type="text/css" />';
+                echo '<div class="phdr_cup"><font color="white"><a href="/fedcup2/fed.php?act=' . $act . '">' . $game['kubok_nomi'] . '</a></font><b class="rlink"><font color="white">' . date("d.m.Y H:i", $game['time']) . '</b></font></div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center">';
+                echo '<img src="/images/cup/b_' . $game['id_kubok'] . '.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
                 
-                <table class="m_team_level_table" style="">
-                    <tr>
-                        <td>
-                            <div class="m_team_level_num game-tour-holder">
-                                <?= htmlspecialchars(isset($uroven) ? $uroven : 'Уровень') ?> <?= isset($kom['level']) ? (int)$kom['level'] : 0 ?>
-                            </div>
-                        </td>
-                        <td style="width: 100%;" class="tooltip">
-                            <span class="tooltip-text tooltip-top">Прогресс: <?= isset($kom['oput']) ? (int)$kom['oput'] : 0 ?>/<?= isset($oput) ? (int)$oput : 0 ?></span>
-                            <div class="m_team_level_pbar game-tour-holder">
-                                <div style="width: <?= isset($kom['oput']) && isset($oput) ? ($kom['oput'] / max($oput, 1)) * 100 : 0; ?>%;"></div>
-                            </div>
-                        </td>
-                        <td><i class="fi fi-clock x-color-dg"></i></td>
-                        <td>
-                            <div class="m_time_short game-tour-holder" onclick="setShowHide('m_time'); return false;">
-                                <?= date("H:i", $realtime) ?>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-
-                <table class="m_team_level_table" style="margin: 6px;">
-                    <tr>
-                        <td>
-                            <div class="m_team_stat">
-                                <i class="fi fi-rocket x-color-yellow"></i>
-                                <small><?= htmlspecialchars(isset($opyt) ? $opyt : 'Опыт') ?> <b><?= isset($kom['oput']) ? (int)$kom['oput'] : 0 ?></b></small>
-                            </div>
-                        </td>
-                        <td>
-                            <div class="m_team_stat">
-                                <i class="fi fi-users x-color-red"></i>
-                                <small><?= htmlspecialchars(isset($fans) ? $fans : 'Фанаты') ?> <b><?= isset($kom['fans']) ? (int)$kom['fans'] : 0 ?></b></small>
-                            </div>
-                        </td>
-                        <td>
-                            <div class="m_team_stat">
-                                <i class="fi fi-flag x-color-dg"></i>
-                                <small><?= htmlspecialchars(isset($slava) ? $slava : 'Слава') ?> <b><?= isset($kom['slava']) ? (int)$kom['slava'] : 0 ?></b></small>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-            </div>
-
-            <?php
-            // Обработка скрытия позиции
-            if (isset($_GET['act']) && $_GET['act'] == "top_hide") {
-                if (!isset($set_user)) $set_user = array();
-                $set_user['matchoftheday'] = 0;
-                $set_user_serialized = mysql_real_escape_string(serialize($set_user));
-                mysql_query("UPDATE `users` SET `set_user` = '$set_user_serialized' WHERE `id` = '$user_id' LIMIT 1");
-                header('Location: ' . $_SERVER['HTTP_REFERER']);
-                exit;
-            }
-
-            // Админ-панель
-            if ($user_id == 1094) {
-                echo '<div class="info"><a href="/fm/admin.php">Админ панель</a></div>';
-                echo '<div class="info"><a href="/admin.php">Админ панель2</a></div>';
-            }
-
-            // Приглашение игроков
-            if (isset($kom['strana']) && $kom['strana'] == 'mir') {
-                echo '<div class="info"><a href="/team/mtj.php"><font color="red">Пригласить игроков</font></a></div>';
-            }
-
-            /**
-             * Проверка и выдача бонуса
-             */
-            function checkAndGiveBonus($user_id, $datauser) {
-                global $realtime;
-                $ip = mysql_real_escape_string($datauser['ip']);
-                $quc = mysql_query("SELECT 1 FROM `umedal` WHERE `ip`='$ip' LIMIT 1");
-                $cont = mysql_num_rows($quc);
-                $qun = mysql_query("SELECT 1 FROM `umedal` WHERE `user`='".(int)$user_id."' LIMIT 1");
-                $um = mysql_num_rows($qun);
-
-                if(isset($_GET['rubl']) && $cont == 0 && $um == 0) {
-                    $new_rubl = $datauser['rubl'] + 1;
-                    mysql_query("UPDATE `users` SET `rubl` = '".(int)$new_rubl."' WHERE `id`='".(int)$user_id."' LIMIT 1");
-                    
-                    mysql_query("INSERT INTO `umedal` SET 
-                        `ip` = '$ip',
-                        `user` = '".(int)$user_id."'");
-                    
-                    header("Location: /fm/");
-                    exit;
-                }
-
-                if($cont == 0 && $um == 0) {
-                    echo '<ul class="m_main_menu">
-                        <center><li class="m_main_menu_item">
-                            <a href="index.php?rubl"><font color="red">Получить 1 <img src="/images/butcer.png" alt=""></font></a>
-                        </li></center>
-                    </ul>';
-                }
-            }
-
-            /**
-             * Проверка набора в чемпионат
-             */
-            function checkChampRegistration($datauser, $kom) {
-                global $realtime;
-                $manager_id = (int)$datauser['manager2'];
-                $q = mysql_query("SELECT 1 FROM `champ_bilet` WHERE id_team='$manager_id' LIMIT 1");
-                $total = mysql_num_rows($q);
-
-                $q57 = mysql_query("SELECT 1 FROM `champ_table` WHERE id_team='$manager_id' LIMIT 1");
-                $total_table = mysql_num_rows($q57);
-
-                if($total == 0 && $total_table == 0) {
-                    $path = ($kom['retro'] == 2000) ? '/champ00/nabor.php' : '/champ/nabor.php';
-                    
-                    echo '<div id="m_notification">
-                        <table style="width: 100%; padding: 6px;" class="x-bg-color-hover x-border-bottom x-border-lg-2">
-                            <tbody><tr>
-                            <span class="x-badge">набор</span>
-                            <td style="width: 60px;"><a href="'.$path.'"><img src="/images/icon/cup.jpeg" alt="!" class="x-rounded" style="width: 50px;"></a></td>
-                            <td>
-                                <a href="'.$path.'" class="x-color-black x-d-block" title="Нажмите, чтобы перейти...">
-                                <span class="x-font-150"><font color="red">'.$uch.'</font></span>
-                                </a>
-                            </td>
-                            <td style="width: 25px; text-align: center;">
-                                <i class="fi fi-cup x-color-yellow x-font-125"></i>
-                                <div class="x-color-dg x-p-2 x-font-150">'.number_format(100000, 0, ',', ' ') . ' <img src="/images/m_game3.gif" class="money"></div>
-                            </td>
-                            </tr>
-                        </tbody></table>
-                    </div>';
-                }
-            }
-
-            // Основной код
-            checkAndGiveBonus($user_id, $datauser);
-            checkChampRegistration($datauser, $kom);
-
-            /**
-             * Отображение кубков
-             */
-            function displayCupNotification($table_prefix, $min_level, $max_level, $liga, $base_path, $cup_images) {
-                global $kom, $realtime, $nabor1s, $nabor1ss;
+            // Исторические кубки
+            case "cup_netto":
+            case "cup_charlton":
+            case "cup_muller":
+            case "cup_puskas":
+            case "cup_fachetti":
+            case "cup_kopa":
+            case "cup_distefano":
+            case "cup_garrinca":
+                $act = str_replace('cup_', '', $game['chemp']);
+                renderCommonCup($game, 'cup', '/fedcup/fed.php?act=' . $act, 'cup');
+                break;
                 
-                if($kom['level'] >= $min_level && $kom['level'] <= $max_level) {
-                    $query = "SELECT * FROM `{$table_prefix}_cup` WHERE `ot`>='$min_level' AND `do`<='$max_level'";
-                    if($liga) $query .= " AND `liga`='$liga'";
-                    $query .= " ORDER BY time DESC LIMIT 1";
+            case "maradona":
+                echo '<link rel="stylesheet" href="/theme/cups/maradona.css" type="text/css" />';
+                echo '<div class="gmenu"><center><a href="/' . $game['id_kubok'] . '"><b></b></a></center> </div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="phdr_lk" style="text-align:center">' . $game['kubok_nomi'] . '</div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center"><img src="/images/cup/b_maradona.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            case "unchamp":
+                echo '<link rel="stylesheet" href="/theme/cups/lk.css" type="text/css" />';
+                echo '<div class="phdr_lk" style="text-align:left"><font color="white"><a href="/' . $game['id_kubok'] . '">' . $game['kubok_nomi'] . '</a></font><b class="rlink"><font color="white">' . date("d.m.Y H:i", $game['time']) . '</b></font></div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center">';
+                echo '<img src="/union/logo/cup' . $game['id_kubok'] . '.jpg" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            case "champ":
+                echo '<div class="phdr">Чемпионат<b class="rlink">' . date("d.m.Y H:i", $game['time']) . '</b></div>';
+                echo '<div class="gmenu"><center><a href="/champ00/index.php?act=' . $game['kubok'] . '"><b>' . $game['kubok_nomi'] . '</b></a></center> </div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center">';
+                echo '<img src="/images/cup/b_00' . $game['kubok'] . '.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            case "champ_retro":
+                echo '<div class="phdr" style="text-align:left">Чемпионат<b class="rlink">' . date("d.m.Y H:i", $game['time']) . '</b></div>';
+                echo '<div class="gmenu"><center><a href="/champ/index.php?act=' . $game['id_kubok'] . '"><b>' . $game['kubok_nomi'] . '</b></a></center> </div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center">';
+                echo '<img src="/images/cup/b_00' . $game['kubok'] . '.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            case "cup":
+                echo '<div class="phdr" style="text-align:left"><a href="/cup/' . $game['id_kubok'] . '">' . $c_name . '</a><b class="rlink">' . date("d.m.Y H:i", $game['time']) . '</b></div>';
+                break;
+                
+            case "brend":
+                echo '<div class="phdr" style="text-align:left"><a href="/brendcup/' . $game['id_kubok'] . '">' . $c_name . '</a><b class="rlink">' . date("d.m.Y H:i", $game['time']) . '</b></div>';
+                break;
+                
+            case "liga_r":
+            case "liga_r2":
+                renderCommonCup($game, 'lc', '/' . $game['id_kubok'], 'lc');
+                echo '<img src="/images/ico/cup_ico/lc2.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            case "liberta":
+                echo '<link rel="stylesheet" href="/theme/cups/liberta.css" type="text/css" />';
+                echo '<div class="phdr_le"><font color="white"><a href="/' . $arr['id_kubok'] . '/"><b>' . $arr['kubok_nomi'] . '</b></a></font><b class="rlink"><font color="white">' . date("d.m.Y H:i", $arr['time']) . '</b></font></div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center">';
+                echo '<img src="/images/cup/b_liberta.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            case "le":
+            case "super_cup":
+            case "super_cup2":
+                $type = ($game['chemp'] == 'le') ? 'le' : 'super_cup';
+                $link = ($game['chemp'] == 'super_cup2') ? '/super_cup2/' : (($game['chemp'] == 'super_cup') ? '/super_cup/' : '/' . $game['id_kubok']);
+                
+                echo '<link rel="stylesheet" href="/theme/cups/' . $type . '.css" type="text/css" />';
+                echo '<div class="phdr_' . $type . '" style="text-align:left"><font color="white">' . $game['kubok_nomi'] . '</font><b class="rlink"><font color="white">' . date("d.m.Y H:i", $game['time']) . '</b></font></div>';
+                echo '<div class="phdr_' . $type . '" style="text-align:left"><center><a href="' . $link . '"><b>' . $game['kubok_nomi'] . '</b></a></center> </div>';
+                echo '<div xmlns="http://www.w3.org/1999/xhtml" class="top" style="text-align: center">';
+                echo '<img src="/images/cup/b_' . $type . '.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            case "lk":
+                renderCommonCup($game, 'lk', '/' . $game['id_kubok'], 'lk');
+                echo '<img src="/images/ico/cup_ico/lc2.png" height="64" alt="*"><br><div class="text_top"><b></b></div></div>';
+                break;
+                
+            default:
+                echo '<div class="phdr">Матч<b class="rlink">' . date("d.m.Y H:i", $game['time']) . '</b></div>';
+                echo '<div class="gmenu"><center><a href="/cup/' . $game['id_kubok'] . '"><b>' . $c_name . '</b></a></center> </div>';
+                break;
+        }
+
+        echo '<br>';
+
+        echo '<table id="pallet"><tr>';
+
+        // Team 1
+        echo '<td width="50%"><center>';
+        echo '<a href="/team/' . $kom1['id'] . '">';
+        echo !empty($kom1['logo']) 
+            ? '<img src="/manager/logo/big' . $kom1['logo'] . '" alt=""/>'
+            : '<img src="/manager/logo/b_0.jpg" alt=""/>';
+        echo '</a>';
+
+        echo "<div class=''>";
+        echo "<a href='/team/" . $kom1['id'] . "'><span class='flags c_" . $kom1['flag'] . "_14' style='vertical-align: middle;' title='" . $kom1['flag'] . "'></span> " . $kom1['name'] . "</a><br>";
+
+        if ($kom1['id_admin'] > 0) {
+            $us1 = mysqli_query($db, "SELECT * FROM `users` WHERE `id`=" . (int)$kom1['id_admin'] . " LIMIT 1");
+            $uss1 = $us1 ? mysqli_fetch_array($us1) : [];
+            if ($uss1) {
+                $vipImages = [
+                    0 => ['src' => 'vip0_m.png', 'title' => 'Базовый аккаунт', 'type' => 0],
+                    1 => ['src' => 'vip1_m.png', 'title' => 'Улучшенный Премиум-аккаунт', 'type' => 1],
+                    2 => ['src' => 'vip2_m.png', 'title' => 'Улучшенный VIP-аккаунт', 'type' => 2],
+                    3 => ['src' => 'vip3_m.png', 'title' => 'Представительский Gold-аккаунт', 'type' => 3]
+                ];
+                $vip = isset($uss1['vip']) ? $uss1['vip'] : 0;
+                if (isset($vipImages[$vip])) {
+                    $img = $vipImages[$vip];
+                    echo '<span style="opacity:0.4"><a href="/vip.php?action=compare&amp;type=' . $img['type'] . '">';
+                    echo '<img src="/images/ico/' . $img['src'] . '" title="' . $img['title'] . '" style="width: 12px;border: none;vertical-align: middle;">';
+                    echo $uss1['name'] . '</span></a>';
+                }
+            }
+        }
+        echo "</div></center></td>";
+
+        // Team 2
+        echo '<td><center>';
+        echo '<a href="/team/' . $kom2['id'] . '">';
+        echo !empty($kom2['logo']) 
+            ? '<img src="/manager/logo/big' . $kom2['logo'] . '" alt=""/>'
+            : '<img src="/manager/logo/b_0.jpg" alt=""/>';
+        echo '</a>';
+
+        echo "<div class=''><a href='/team/" . $kom2['id'] . "'>" . $kom2['name'] . " <span class='flags c_" . $kom2['flag'] . "_14' style='vertical-align: middle;' title='" . $kom2['flag'] . "'></span></a><br>";
+
+        if ($kom2['id_admin'] > 0) {
+            $us2 = mysqli_query($db, "SELECT * FROM `users` WHERE `id`=" . (int)$kom2['id_admin'] . " LIMIT 1");
+            $uss2 = $us2 ? mysqli_fetch_array($us2) : [];
+            if ($uss2) {
+                $vipImages = [
+                    0 => ['src' => 'vip0_m.png', 'title' => 'Базовый аккаунт', 'type' => 0],
+                    1 => ['src' => 'vip1_m.png', 'title' => 'Улучшенный Премиум-аккаунт', 'type' => 1],
+                    2 => ['src' => 'vip2_m.png', 'title' => 'Улучшенный VIP-аккаунт', 'type' => 2],
+                    3 => ['src' => 'vip3_m.png', 'title' => 'Представительский Gold-аккаунт', 'type' => 3]
+                ];
+                $vip = isset($uss2['vip']) ? $uss2['vip'] : 0;
+                if (isset($vipImages[$vip])) {
+                    $img = $vipImages[$vip];
+                    echo '<span style="opacity:0.4"><a href="/vip.php?action=compare&amp;type=' . $img['type'] . '">';
+                    echo '<img src="/images/ico/' . $img['src'] . '" title="' . $img['title'] . '" style="width: 12px;border: none;vertical-align: middle;">';
+                    echo $uss2['name'] . '</span></a>';
+                }
+            }
+        }
+        echo "</center></td>";
+
+        echo '</tr></table>';
+
+        echo '<div style="display: flex; text-align: center; width: 100%; justify-content: center; align-items: center;">
+                <div class="tab-p but head_button" type="button" id="addteam">Расстановка</div>
+                <div class="tab-p but head_button" type="button" id="sostav">Составы</div>
+                <div class="tab-p but head_button" type="button" id="h2h">H2H</div>
+                <div class="tab-p but head_button" type="button" id="bets">Ставки</div>
+                <div class="tab-p but head_button" type="button" id="information">Информация</div>
+              </div>';
+
+        echo '<div id="addteamdiv" class="content">';
+        echo '<div class="phdr" style="text-align:center">Стартовый состав</div>';
+        echo '<div id="pagewrap"><div style="display: flex; justify-content: space-around;">';
+
+        // Функция для генерации ячейки игрока
+        function generatePlayerCell($player, $form, $position_title, $game, $is_goalkeeper = false) {
+            if (empty($player)) return '<td></td>';
+            
+            $output = '<td><a href="/player/'.$player['id'].'" class="schema_plink" title="Нажмите, чтобы заменить игрока ('.$position_title.')">';
+            
+            // Форма игрока
+            if ($is_goalkeeper) {
+                $output .= '<img src="/images/forma/59.gif" alt=""><br>';
+            } else {
+                $output .= '<img src="/images/forma/'.$form.'.gif" alt=""><br>';
+            }
+            
+            // Иконка пропуска матча
+            if (!empty($player['utime'])) {
+                $output .= '<img src="/images/gen4/yrc.png" class="hint" title="Пропускает следующий матч из-за перебора желтых карточек" alt="">';
+            }
+            
+            // Отображение желтых карточек
+            $yc_count = 0;
+            $title_text = '';
+            if (!empty($game['chemp'])) {
+                switch ($game['chemp']) {
+                    case "champ_retro": 
+                        $yc_count = isset($player['yc']) ? (int)$player['yc'] : 0;
+                        $title_text = 'в Чемпионате';
+                        break;
+                    case "unchamp": 
+                        $yc_count = isset($player['yc_unchamp']) ? (int)$player['yc_unchamp'] : 0;
+                        $title_text = '';
+                        break;
+                    case "liga_r": 
+                        $yc_count = isset($player['yc_liga_r']) ? (int)$player['yc_liga_r'] : 0;
+                        $title_text = 'в КЕЧ';
+                        break;
+                    case "le": 
+                        $yc_count = isset($player['yc_le']) ? (int)$player['yc_le'] : 0;
+                        $title_text = 'в Кубке УЕФА';
+                        break;
+                }
+            }
+            
+            if ($yc_count > 0) {
+                $title = $title_text ? "Кол-во НЕ сгоревших желтых карточек $title_text" : "Кол-во НЕ сгоревших желтых карточек";
+                $output .= '<div class="player-cards-1" title="'.$title.'">'.$yc_count.'</div>';
+            }
+            
+            // Имя игрока
+            $output .= '<div class="team_name2">';
+            if (!empty($player['utime'])) {
+                $output .= '<span class="__fio2">'.full_name_to_short($player['name']).'</span>';
+            } else {
+                $output .= '<span class="schema_plname">'.full_name_to_short($player['name']).'</span>';
+            }
+            $output .= '</a></div></td>';
+            
+            return $output;
+        }
+
+        // Запрос данных команды
+        $team_id = isset($arr1['id']) ? (int)$arr1['id'] : 0;
+        $team_query = mysqli_query($db, "SELECT * FROM `r_team` WHERE id='$team_id' LIMIT 1");
+        $kom = $team_query ? mysqli_fetch_assoc($team_query) : [];
+
+        // Проверка существования команды
+        if (!$kom) {
+            echo "Команда не найдена";
+            exit;
+        }
+
+        // Запрос данных игроков
+        $players = [];
+        for ($i = 1; $i <= 11; $i++) {
+            $player_id = isset($kom['i'.$i]) ? (int)$kom['i'.$i] : 0;
+            if ($player_id) {
+                $result = mysqli_query($db, "SELECT * FROM `r_player` WHERE id='$player_id'");
+                $players[$i] = $result ? mysqli_fetch_assoc($result) : [];
+            } else {
+                $players[$i] = [];
+            }
+        }
+
+        // Схема по умолчанию
+        $schema = isset($arr1['shema']) ? mysqli_real_escape_string($db, $arr1['shema']) : '4-3-3';
+
+        echo '<table class="schema_table2" border="0">';
+
+        switch ($schema) {
+            case "4-3-3":
+                echo '<tbody>
+                    <tr style="height:35%"><td colspan="4">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            <td style="padding-top:10%">'.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'</td>
+                            <td style="padding-top:10%">'.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'</td>
+                            <td style="padding-top:10%">'.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'</td>
+                        </tr></tbody></table>
+                    </td></tr>
                     
-                    $req = mysql_query($query);
-                    if($arr = mysql_fetch_array($req)) {
-                        $b = mysql_query("SELECT 1 FROM `{$table_prefix}_bilet` WHERE id_cup = '".(int)$arr['id']."' LIMIT 8");
-                        $totalbilet = mysql_num_rows($b);
+                    <tr style="height:30%"><td colspan="4">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            <td style="padding-top:0%">'.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'</td>
+                            <td style="padding-top:0%">'.generatePlayerCell($players[7], $kom['forma'], 'Rm', $game).'</td>
+                            <td style="padding-top:0%">'.generatePlayerCell($players[8], $kom['forma'], 'Cm', $game).'</td>
+                        </tr></tbody></table>
+                    </td></tr>
+                    
+                    <tr style="height:20%">
+                        '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "3-4-3":
+                echo '<tbody>
+                    <tr style="height:35%">
+                        '.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'
+                        '.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'
+                        '.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'
+                    </tr>
+                    
+                    <tr style="height:30%">
+                        <td rowspan="2">'.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'</td>
+                        '.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'
+                        <td rowspan="2">'.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'</td>
+                    </tr>
+                    <tr style="height:5%">
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%">
+                        '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%"><td colspan="3">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "2-5-3":
+                echo '<tbody>
+                    <tr style="height:30%"><td colspan="4">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            '.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'
+                            '.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'
+                            '.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'
+                        </tr></tbody></table>
+                    </td></tr>
+                    
+                    <tr style="height:40%">
+                        <td rowspan="2">'.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'</td>
+                        '.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'
+                        '.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'
+                        <td rowspan="2">'.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'</td>
+                    </tr>
+                    <tr style="height:5%">
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%"><td colspan="4">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                            '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        </tr></tbody></table>
+                    </td></tr>
+                    
+                    <tr style="height:15%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "5-3-2":
+                echo '<tbody>
+                    <tr style="height:40%"><td colspan="4" style="">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            '.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'
+                            '.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'
+                        </tr>
+                        <tr>
+                            '.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'
+                            '.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'
+                        </tr></tbody></table>
+                    </td></tr>
+                    
+                    <tr style="height:15%"><td colspan="4">'.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'</td></tr>
+                    
+                    <tr style="height:15%">
+                        '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                        '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%"><td colspan="4">'.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'</td></tr>
+                    
+                    <tr style="height:15%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "4-4-2":
+                echo '<tbody>
+                    <tr style="height:40%"><td colspan="4" style="">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            '.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'
+                            '.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'
+                        </tr></tbody></table>
+                    </td></tr>
+                    
+                    <tr style="height:10%">
+                        <td rowspan="2">'.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'</td>
+                        '.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'
+                        <td rowspan="2">'.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'</td>
+                    </tr>
+                    <tr style="height:10%">
+                        '.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'
+                    </tr>
+                    
+                    <tr style="height:30%">
+                        '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                        '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:10%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "3-5-2":
+                echo '<tbody>
+                    <tr style="height:25%"><td colspan="4" style="">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            '.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'
+                            '.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'
+                        </tr></tbody></table>
+                    </td></tr>
+                    
+                    <tr>
+                        <td rowspan="3" valign="bottom">'.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'</td>
+                        '.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'
+                        <td rowspan="3" valign="bottom">'.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'</td>
+                    </tr>
+                    <tr>
+                        '.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'
+                    </tr>
+                    <tr>
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%"><td colspan="4">
+                        <table border="0" style="height:100%; width:100%">
+                        <tbody><tr>
+                            '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                            '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                            '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                        </tr></tbody></table>
+                    </td></tr>
+                    
+                    <tr style="height:10%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "5-4-1":
+                echo '<tbody>
+                    <tr style="height:40%"><td colspan="4">'.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'</td></tr>
+                    
+                    <tr style="height:15%">
+                        <td rowspan="2">'.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'</td>
+                        '.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'
+                        <td rowspan="2">'.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'</td>
+                    </tr>
+                    <tr style="height:5%">
+                        '.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%">
+                        '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                        '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%"><td colspan="4">'.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'</td></tr>
+                    
+                    <tr style="height:10%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "4-5-1":
+                echo '<tbody>
+                    <tr style="height:35%"><td colspan="4" style="">'.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'</td></tr>
+                    
+                    <tr style="height:10%"><td colspan="4" style="">'.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'</td></tr>
+                    
+                    <tr style="height:10%">
+                        <td rowspan="2">'.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'</td>
+                        '.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'
+                        <td rowspan="2">'.generatePlayerCell($players[9], $kom['forma'], 'Lf', $game).'</td>
+                    </tr>
+                    <tr style="height:10%">
+                        '.generatePlayerCell($players[10], $kom['forma'], 'Rf', $game).'
+                    </tr>
+                    
+                    <tr style="height:20%">
+                        '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                        '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:15%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            case "6-3-1":
+                echo '<tbody>
+                    <tr style="height:45%"><td colspan="4">'.generatePlayerCell($players[11], $kom['forma'], 'Cf', $game).'</td></tr>
+                    
+                    <tr style="height:25%">
+                        '.generatePlayerCell($players[6], $kom['forma'], 'Cm', $game).'
+                        '.generatePlayerCell($players[7], $kom['forma'], 'Cm', $game).'
+                        '.generatePlayerCell($players[8], $kom['forma'], 'Rm', $game).'
+                    </tr>
+                    
+                    <tr style="height:10%">
+                        '.generatePlayerCell($players[2], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[3], $kom['forma'], 'Ld', $game).'
+                        '.generatePlayerCell($players[4], $kom['forma'], 'Rd', $game).'
+                        '.generatePlayerCell($players[5], $kom['forma'], 'Rd', $game).'
+                    </tr>
+                    
+                    <tr style="height:20%"><td colspan="4">'.generatePlayerCell($players[1], $kom['forma'], 'Gk', $game, true).'</td></tr>
+                </tbody>';
+                break;
+
+            default:
+                echo '<tbody><tr><td colspan="4">Неизвестная схема: '.htmlspecialchars($schema).'</td></tr></tbody>';
+        }
+
+        echo '</table></div></div></div>';
+
+        echo '<div id="betsdiv" class="content">';
+        echo '<link rel="stylesheet" href="/game/bets.css" type="text/css" />';
+
+        // Проверка авторизации и параметра
+        if (empty($datauser['id'])) {
+            header("Location: #");
+            exit;
+        }
+
+        if (empty($_GET['id']) || !ctype_digit($_GET['id'])) {
+            header("Location: #");
+            exit;
+        }
+        $id = (int)$_GET['id'];
+
+        // Получаем данные матча
+        $game = mysqli_fetch_assoc(mysqli_query($db, 
+            "SELECT * FROM r_game WHERE id_match = '$id' LIMIT 1"
+        ));
+
+        // Получаем баланс пользователя
+        $ratRes = mysqli_fetch_assoc(mysqli_query($db, 
+            "SELECT money FROM r_team WHERE id = {$datauser['manager2']}"
+        ));
+        $balance = isset($ratRes['money']) ? $ratRes['money'] : 0;
+
+        // Проверка доступности ставок
+        $game5 = mysqli_fetch_assoc(mysqli_query($db, 
+            "SELECT * FROM t_games 
+            WHERE champ = '{$game['chemp']}' 
+            AND id_match = {$game['id_match']}"
+        ));
+
+        if (!$game5) {
+            echo '<div class="rmenu">На этот матч нет ставок</div>';
+        } else {
+            $betCloseTime = $game['time'] - 60;
+            
+            if ($betCloseTime > $realtime) {
+                // Обработка отправки формы
+                $error = '';
+                if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+                    $winner = isset($_POST['winner']) ? (int)$_POST['winner'] : 0;
+                    $mil = isset($_POST['mil']) ? (int)$_POST['mil'] : 0;
+                    
+                    if ($winner && $mil >= 10 && $mil <= $balance) {
+                        mysqli_query($db, "START TRANSACTION");
                         
-                        if($totalbilet < 8) {
-                            $cup_id = $arr['id_cup'];
-                            $c_name = isset($GLOBALS["c_$cup_id"]) ? $GLOBALS["c_$cup_id"] : $arr['name'];
+                        // Добавляем ставку
+                        $insert = mysqli_query($db, 
+                            "INSERT INTO t_mils VALUES (
+                                0, 
+                                '$id', 
+                                '$user_id', 
+                                '$mil', 
+                                '$winner'
+                            )"
+                        );
+                        
+                        if ($insert) {
+                            // Обновляем баланс
+                            mysqli_query($db, 
+                                "UPDATE r_team 
+                                SET money = money - $mil 
+                                WHERE id = {$datauser['manager2']}"
+                            );
                             
-                            echo '<div id="m_notification">
-                                <table style="width: 100%; padding: 6px;" class="x-bg-color-hover x-border-bottom x-border-lg-2">
-                                    <tbody><tr>
-                                    <td style="width: 60px;"><a href="'.$base_path.'/cup.php?id='.(int)$arr['id'].'">
-                                        <img src="/images/cup/b_'.$cup_id.'.png" alt="!" class="x-rounded" style="width: 50px;"></a></td>
-                                    <td>
-                                        <a href="'.$base_path.'/cup.php?id='.(int)$arr['id'].'" class="x-color-black x-d-block" title="Нажмите, чтобы перейти...">
-                                        <span class="x-font-150">'.htmlspecialchars($c_name).'</span>
-                                        <span class="x-d-block x-py-1">'.htmlspecialchars($nabor1s).'</span>
-                                        <span class="x-color-dg">'.htmlspecialchars($nabor1ss).'</span>
-                                        </a>
-                                    </td>
-                                    <td style="width: 25px; text-align: center;">
-                                        <i class="fi fi-cup x-color-yellow x-font-125"></i>
-                                        <div class="x-color-dg x-p-2 x-font-150">'.number_format_short($arr['priz']).' <img src="/images/m_game3.gif" class="money"></div>
-                                    </td>
-                                    </tr>
-                                </tbody></table>
-                            </div>';
+                            // Формируем текст ставки
+                            $teams = explode('|', $game5['teams']);
+                            $betTypes = [
+                                1 => $teams[0] . ' <b>П1</b>',
+                                2 => $teams[1] . ' <b>П2</b>',
+                                3 => $teams[0].'-'.$teams[1].' <b>Ничья</b>'
+                            ];
+                            $betText = isset($betTypes[$winner]) ? $betTypes[$winner] : 'Неизвестная ставка';
+                            
+                            // Добавляем запись в историю
+                            mysqli_query($db, 
+                                "INSERT INTO news SET
+                                time = '$realtime',
+                                money = '-$mil',
+                                text = 'Ставка $betText',
+                                team_id = '{$datauser['manager2']}'"
+                            );
+                            
+                            mysqli_query($db, "COMMIT");
+                            header("Location: ".$_SERVER['REQUEST_URI']);
+                            exit;
+                        } else {
+                            $error = 'Ошибка при сохранении ставки';
+                        }
+                    } else {
+                        $error = 'Некорректная сумма или выбор ставки';
+                    }
+                }
+                
+                // Формируем коэффициенты
+                $teams = explode('|', $game5['teams']);
+                $coefs = explode('|', $game5['coefs']);
+                
+                echo '<div class="phdr" style="text-align:center">Сделать ставку</div>';
+                
+                if ($balance < 10) {
+                    echo '<div class="rmenu">Недостаточно средств. Минимум: 10 <img src="/images/m_game3.gif" class="money"></div>';
+                } else {
+                    if ($error) {
+                        echo '<div class="rmenu">'.$error.'</div>';
+                    }
+                    
+                    echo '<div class="menu"><form method="POST">';
+                    echo '<div class="market-group-box--z23Vvd">
+                        <div class="header--2fWAgi _expanded--2iUfDc">
+                            <div class="section--5JAm4a">
+                                <div class="text-new--2WAqa8">Исход матча (основное время)</div>
+                            </div>
+                        </div>
+                        <div class="cardview x-text-center">
+                            <div class="section--5JAm4a _horizontal--18WrKP">
+                                <div class="grid--6A7cHV">
+                                    <div class="row-common--33mLED">
+                                        <div class="cell-wrap--LHnTwg">
+                                            <div class="cardview x-text-center" style="display: flex; flex: 1 1 0%; position: relative; height: 30px;">
+                                                <label>
+                                                    <div class="factor-td--3ZZULU cell-state-normal--iYJc0x">
+                                                        <div class="t--4zyb4K text-state-normal--1L40o3">
+                                                            <input type="radio" name="winner" value="1" required> '.$teams[0].'
+                                                        </div>
+                                                        <div class="v--1iHcVX value-state-normal--4JL4xN">'.$coefs[0].'</div>
+                                                    </div>
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div class="cell-wrap--LHnTwg">
+                                            <div style="display: flex; flex: 1 1 0%; position: relative; height: 30px;">
+                                                <label>
+                                                    <div class="factor-td--3ZZULU cell-state-normal--iYJc0x">
+                                                        <div class="t--4zyb4K text-state-normal--1L40o3">
+                                                            <input type="radio" name="winner" value="3"> Ничья
+                                                        </div>
+                                                        <div class="v--1iHcVX value-state-normal--4JL4xN">'.$coefs[2].'</div>
+                                                    </div>
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div class="cell-wrap--LHnTwg">
+                                            <div style="display: flex; flex: 1 1 0%; position: relative; height: 30px;">
+                                                <label>
+                                                    <div class="factor-td--3ZZULU cell-state-normal--iYJc0x">
+                                                        <div class="t--4zyb4K text-state-normal--1L40o3">
+                                                            <input type="radio" name="winner" value="2"> '.$teams[1].'
+                                                        </div>
+                                                        <div class="v--1iHcVX value-state-normal--4JL4xN">'.$coefs[1].'</div>
+                                                    </div>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>';
+                    
+                    echo '<br><label>Ставка: 
+                        <input type="number" name="mil" value="10" min="10" max="'.$balance.'" required>
+                        (10-'.$balance.')</label><br>';
+                    echo '<input type="submit" name="submit" value="Поставить">';
+                    echo '</form></div>';
+                }
+            } else {
+                echo '<div class="rmenu">Приём ставок окончен</div>';
+            }
+            
+            // История ставок
+            $betsQuery = mysqli_query($db, 
+                "SELECT * FROM t_mils 
+                WHERE user = '$user_id' 
+                AND refid = {$game['id']}"
+            );
+            $allMils = $betsQuery ? mysqli_num_rows($betsQuery) : 0;
+            
+            echo '<center><div class="gmenu">Всего ставок: '.$allMils.'</div>';
+            
+            if ($betsQuery) {
+                while ($bet = mysqli_fetch_assoc($betsQuery)) {
+                    $betTypes = [
+                        1 => 'П1',
+                        2 => 'П2',
+                        3 => 'Ничья'
+                    ];
+                    $betType = isset($betTypes[$bet['winner']]) ? $betTypes[$bet['winner']] : 'Неизвестно';
+                    
+                    echo '<tr class="coupon__table-row--6OoyA1">
+                        <td class="coupon__table-col--3p8NRM" colspan="2">
+                            <span>'.$game['name_team1'].' – '.$game['name_team2'].'</span>
+                        </td>
+                        <td class="coupon__table-col--3p8NRM _type_stake--4UOCA4">
+                            <span><b>'.$betType.'</b></span>
+                            '.$bet['mil'].' <img src="/images/m_game3.gif" class="money">
+                        </td>
+                        <td class="coupon__table-col--3p8NRM coupon__table-status--77SBfz">
+                            <span class="coupon__table-stake--PyBpdc">';
+                    
+                    // Коэффициент в зависимости от типа ставки
+                    if ($bet['winner'] == 1) echo $coefs[0];
+                    elseif ($bet['winner'] == 2) echo $coefs[1];
+                    else echo $coefs[2];
+                    
+                    echo '</span>
+                        </td>
+                    </tr><br>';
+                }
+            }
+            echo '</center>';
+        }
+
+        echo '</div><div id="h2hdiv" class="content">';
+
+        // Подключение файла с историей
+        require_once("../game/history3.php");
+
+        echo '</div>';
+
+        echo '<div id="informationdiv" class="content">';
+
+        ///////////////information games
+
+        ///////////////stadion
+        $std11 = mysqli_query($db, "SELECT * FROM `r_stadium` WHERE `id`='".mysqli_real_escape_string($db, $game['id_stadium'])."' LIMIT 1");
+        $std11 = $std11 ? mysqli_fetch_array($std11) : [];
+
+        if($game['id_stadium']) {
+            echo '<div class="game-ui__history">
+                    <div style="float: left; margin-right: 40px;">';
+            
+            if($std11['std']) {
+                echo '<img src="/images/stadium/'.$game['id_stadium'].'.jpg" style="width: 480px; height: 240px; border: 1px solid var(--primary-color-border); margin-top:7px;" alt="">';
+            } else {
+                echo '<img src="/images/stadium/stadium.jpg" style="width: 480px; height: 240px; border: 1px solid var(--primary-color-border); margin-top:7px;" alt="">';
+            }
+            
+            echo '</div>
+                  <div style="font-size:140%;margin-top:20px;">Место проведения матча</div>
+                  <div style="font-size:170%;">'.$std11['name'].'</div>
+                  <div style="font-size:160%;color:green;">'.$game['zritel'].' зрителей</div>';
+            
+            if($game['chemp'] == '!frend') {
+                echo '<div>город '.$std11['city'].'</div>';
+            }
+            
+            echo '</div>';
+        }
+        ///////////////stadion
+
+        $j1 = mysqli_query($db, "SELECT * FROM `r_team` WHERE id='".mysqli_real_escape_string($db, $game['id_team1'])."' LIMIT 1");
+        $jam1 = $j1 ? mysqli_fetch_array($j1) : [];
+
+        $j2 = mysqli_query($db, "SELECT * FROM `r_team` WHERE id='".mysqli_real_escape_string($db, $game['id_team2'])."' LIMIT 1");
+        $jam2 = $j2 ? mysqli_fetch_array($j2) : [];
+
+        ///////////////information games
+        echo '</div>';
+
+        echo '<div id="sostavdiv" class="content">';
+        echo '<div class="phdr orangebk"><center><b>Состав</b></center></div>';
+
+        echo '<table id="example" class="t-table">';
+        echo '<tr bgcolor="40B832" align="center" class="whiteheader">';
+        echo '<td><b>'.$jam1['name'].'</b></td><td><b>'.$jam2['name'].'</b></td></tr>';
+        echo '<tr>';
+
+        // Team 1 players
+        $rq = mysqli_query($db, "SELECT * FROM `r_player` WHERE `team`='".$jam1['id']."' 
+                      AND (`id`='".$jam1['i1']."' OR `id`='".$jam1['i2']."' OR `id`='".$jam1['i3']."' 
+                      OR `id`='".$jam1['i4']."' OR `id`='".$jam1['i5']."' OR `id`='".$jam1['i6']."' 
+                      OR `id`='".$jam1['i7']."' OR `id`='".$jam1['i8']."' OR `id`='".$jam1['i9']."' 
+                      OR `id`='".$jam1['i10']."' OR `id`='".$jam1['i11']."') 
+                      AND `sostav`!='4' ORDER BY line ASC, poz ASC");
+
+        echo '<td width="50%">';
+        if ($rq) {
+            while ($parr1 = mysqli_fetch_array($rq)) {
+                $bgColor = '';
+                if ($datauser['black'] == 0) {
+                    // Replace match() with switch (PHP 5.x compatible)
+                    switch ($parr1['line']) {
+                        case 1: $bgColor = '#fff7e7'; break;
+                        case 2: $bgColor = '#f7ffef'; break;
+                        case 3: $bgColor = '#e7f7ff'; break;
+                        case 4: $bgColor = '#ffefef'; break;
+                        default: $bgColor = ''; break;
+                    }
+                } else {
+                    switch ($parr1['line']) {
+                        case 1: $bgColor = '#434343'; break;
+                        case 2: $bgColor = '#363636'; break;
+                        case 3: $bgColor = '#262525'; break;
+                        case 4: $bgColor = '#1e1e1e'; break;
+                        default: $bgColor = ''; break;
+                    }
+                }
+                
+                echo '<div style="background-color:' . $bgColor . '" class="gmenu2">';
+                echo '<span class="flags c_' . $parr1['flag'] . '_18" style="vertical-align: middle;" title="' . $parr1['flag'] . '"></span> ';
+                echo '<b>' . $parr1['poz'] . '</b> ';
+                echo '<a href="/player/' . $parr1['id'] . '">' . $parr1['name'] . '</a> ';
+                
+                // Display cards based on tournament type
+                switch ($game['chemp']) {
+                    case "champ_retro":
+                        if ($parr1['yc'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во НЕ сгоревших желтых карточек в Чемпионате">' . $parr1['yc'] . '</div>';
+                        }
+                        break;
+                    case "unchamp":
+                        if ($parr1['yc_unchamp'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во НЕ сгоревших желтых карточек в Союзном Чемпионате">' . $parr1['yc_unchamp'] . '</div>';
+                        }
+                        break;
+                    case "liga_r":
+                        if ($parr1['yc_liga_r'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во НЕ сгоревших желтых карточек в Ретро Кубке Чемпионов">' . $parr1['yc_liga_r'] . '</div>';
+                        }
+                        break;
+                    case "le":
+                        if ($parr1['yc_le'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во НЕ сгоревших желтых карточек в Кубке УЕФА">' . $parr1['yc_le'] . '</div>';
+                        }
+                        break;
+                }
+                
+                if ($parr1['rc'] > 0) {
+                    echo '<div class="player-cards-2" title="Кол-во НЕ сгоревших красных карточек">' . $parr1['rc'] . '</div>';
+                }
+                
+                echo '</div>';
+            }
+        }
+        echo '</td>';
+
+        // Team 2 players
+        $rq2 = mysqli_query($db, "SELECT * FROM `r_player` WHERE `team`='".$jam2['id']."' 
+                       AND (`id`='".$jam2['i1']."' OR `id`='".$jam2['i2']."' OR `id`='".$jam2['i3']."' 
+                       OR `id`='".$jam2['i4']."' OR `id`='".$jam2['i5']."' OR `id`='".$jam2['i6']."' 
+                       OR `id`='".$jam2['i7']."' OR `id`='".$jam2['i8']."' OR `id`='".$jam2['i9']."' 
+                       OR `id`='".$jam2['i10']."' OR `id`='".$jam2['i11']."') 
+                       AND `sostav`!='4' ORDER BY line ASC, poz ASC");
+
+        echo '<td width="50%">';
+        if ($rq2) {
+            while ($parr2 = mysqli_fetch_array($rq2)) {
+                $bgColor = '';
+                if($datauser['black'] == 0) {
+                    // Replaced match() with switch-case
+                    switch ($parr2['line']) {
+                        case 1: $bgColor = '#fff7e7'; break;
+                        case 2: $bgColor = '#f7ffef'; break;
+                        case 3: $bgColor = '#e7f7ff'; break;
+                        case 4: $bgColor = '#ffefef'; break;
+                        default: $bgColor = ''; break;
+                    }
+                } else {
+                    switch ($parr2['line']) {
+                        case 1: $bgColor = '#434343'; break;
+                        case 2: $bgColor = '#363636'; break;
+                        case 3: $bgColor = '#262525'; break;
+                        case 4: $bgColor = '#1e1e1e'; break;
+                        default: $bgColor = ''; break;
+                    }
+                }
+                
+                echo '<div style="background-color:'.$bgColor.'" class="gmenu2">';
+                echo '<span class="flags c_'.$parr2['flag'].'_18" style="vertical-align: middle;" title="'.$parr2['flag'].'"></span> ';
+                echo '<b>'.$parr2['poz'].'</b> <a href="/player/'.$parr2['id'].'">'.$parr2['name'] . ' ';
+                
+                switch ($game['chemp']) {
+                    case "champ_retro":
+                        if($parr2['yc'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во желтых карточек">'.$parr2['yc'].'</div>';
+                        }
+                        break;
+                    case "unchamp":
+                        if($parr2['yc_unchamp'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во желтых карточек">'.$parr2['yc_unchamp'].'</div>';
+                        }
+                        break;
+                    case "liga_r":
+                        if($parr2['yc_liga_r'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во желтых карточек">'.$parr2['yc_liga_r'].'</div>';
+                        }
+                        break;
+                    case "le":
+                        if($parr2['yc_le'] > 0) {
+                            echo '<div class="player-cards-1" title="Кол-во желтых карточек">'.$parr2['yc_le'].'</div>';
+                        }
+                        break;
+                }
+                
+                if($parr2['rc'] > 0) {
+                    echo '<div class="player-cards-2" title="Кол-во красных карточек">'.$parr2['rc'].'</div>';
+                }
+                
+                echo '</a>';
+                echo '</div>';
+            }
+        }
+        echo '</td>';
+
+        echo '</tr></table>';
+        echo '</div>';
+
+        echo '<meta http-equiv="refresh" content="60;url=/game'.$dirs.$id.'"/>';
+        echo '<center><div class="info">Матч начнется через: '.date("i:s", $ostime).'</div></center>';
+
+        if ($datauser['manager2'] == $game['id_team1'] || $datauser['manager2'] == $game['id_team2']) {
+            echo '<br/><center><form action="/team/sostav.php"><input type="submit" title="Нажмите для изменения состава" name="submit" value="Изменить состав"/></form>';
+            echo '<form action="/team/tactic.php"><input type="submit" title="Нажмите для изменения тактики" name="submit" value="Изменить тактику"/></form></center><br/>';
+        }
+
+        ////////////////////////Убираем игрока с дисквалификацией из состава/////////////////////
+        if ($game['chemp'] == 'champ_retro') {
+            // Team 1
+            $test1 = mysqli_query($db, "SELECT * FROM `r_player` WHERE (`id`='".$jam1['i1']."' OR `id`='".$jam1['i2']."' OR `id`='".$jam1['i3']."' 
+                             OR `id`='".$jam1['i4']."' OR `id`='".$jam1['i5']."' OR `id`='".$jam1['i6']."' 
+                             OR `id`='".$jam1['i7']."' OR `id`='".$jam1['i8']."' OR `id`='".$jam1['i9']."' 
+                             OR `id`='".$jam1['i10']."' OR `id`='".$jam1['i11']."') 
+                             AND `team`='".$jam1['id']."' LIMIT 11");
+            
+            if ($test1) {
+                while ($pidr = mysqli_fetch_array($test1)) {
+                    if ($pidr['utime'] > 0) {
+                        mysqli_query($db, "UPDATE `r_player` SET `sostav`='4' WHERE `id`='".$pidr['id']."'");
+                        for($i = 1; $i <= 11; $i++) {
+                            mysqli_query($db, "UPDATE `r_team` SET `i".$i."`='' WHERE `i".$i."`='".$pidr['id']."'");
+                        }
+                        echo '<div class ="error">Мы убрали '.$pidr['name'].' из состава. У него дисквалификация</div>';
+                    }
+                }
+            }
+            
+            // Team 2
+            $test2 = mysqli_query($db, "SELECT * FROM `r_player` WHERE (`id`='".$jam2['i1']."' OR `id`='".$jam2['i2']."' OR `id`='".$jam2['i3']."' 
+                             OR `id`='".$jam2['i4']."' OR `id`='".$jam2['i5']."' OR `id`='".$jam2['i6']."' 
+                             OR `id`='".$jam2['i7']."' OR `id`='".$jam2['i8']."' OR `id`='".$jam2['i9']."' 
+                             OR `id`='".$jam2['i10']."' OR `id`='".$jam2['i11']."') 
+                             AND `team`='".$jam2['id']."' LIMIT 11");
+            
+            if ($test2) {
+                while ($pidr2 = mysqli_fetch_array($test2)) {
+                    if ($pidr2['utime'] > 0) {
+                        mysqli_query($db, "UPDATE `r_player` SET `sostav`='4' WHERE `id`='".$pidr2['id']."'");
+                        for($i = 1; $i <= 11; $i++) {
+                            mysqli_query($db, "UPDATE `r_team` SET `i".$i."`='' WHERE `i".$i."`='".$pidr2['id']."'");
+                        }
+                        echo '<div class ="error">Мы убрали '.$pidr2['name'].' из состава. У него дисквалификация</div>';
+                    }
+                }
+            }
+        }
+        ////////////////////////Убираем игрока с дисквалификацией из состава/////////////////////
+
+        //////////////////////autosostav
+
+        // Team 1
+        $result = mysqli_query($db, "SELECT * FROM `r_player` WHERE (`id`='".$jam1['i1']."' OR `id`='".$jam1['i2']."' OR `id`='".$jam1['i3']."' 
+                          OR `id`='".$jam1['i4']."' OR `id`='".$jam1['i5']."' OR `id`='".$jam1['i6']."' 
+                          OR `id`='".$jam1['i7']."' OR `id`='".$jam1['i8']."' OR `id`='".$jam1['i9']."' 
+                          OR `id`='".$jam1['i10']."' OR `id`='".$jam1['i11']."') 
+                          AND `team`='".$jam1['id']."' AND `sostav`!='4'");
+        $myrow = $result ? mysqli_fetch_row($result) : [];
+
+        if ($myrow && count($myrow) < 11) {
+            echo $jam1['name'].' У вас меньше 11 игроков<br>';
+            
+            $sql = mysqli_query($db, "SELECT * FROM `r_team` WHERE `id`='".$game['id_team1']."' LIMIT 1");
+            if(mysqli_num_rows($sql)) {
+                $team = mysqli_fetch_assoc($sql);
+                for($i = 1; $i <= 11; $i++) {
+                    if(!$team['i'.$i]) {
+                        if($i == 1) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team1']."' AND `line`='1' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        } elseif($i >= 2 && $i <= 4) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team1']."' AND `line`='2' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        } elseif($i >= 5 && $i <= 9) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team1']."' AND `line`='3' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        } elseif($i >= 10 && $i <= 11) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team1']."' AND `line`='4' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        }
+                        
+                        if(!mysqli_num_rows($sql)) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team1']."' AND `sostav`='0' AND `line`!='1' ORDER BY `rm` LIMIT 1");
+                        }
+                        
+                        if(mysqli_num_rows($sql)) {
+                            $player = mysqli_fetch_assoc($sql);
+                            mysqli_query($db, "UPDATE `r_team` SET `i$i`='".$player['id']."' WHERE `id`='".$game['id_team1']."' LIMIT 1");
+                            mysqli_query($db, "UPDATE `r_player` SET `sostav`='1' WHERE `id`='".$player['id']."' LIMIT 1");
                         }
                     }
                 }
             }
+        }
 
-            // Регулярные кубки
-            displayCupNotification('r', 1, 2, 1, '/tournament', true);
-            displayCupNotification('r', 2, 2, 2, '/tournament', true);
-            displayCupNotification('r', 3, 3, 3, '/tournament', true);
-            displayCupNotification('r', 4, 4, 4, '/tournament', true);
-            displayCupNotification('r', 5, 15, 5, '/tournament', true);
+        // Team 2
+        $result2 = mysqli_query($db, "SELECT * FROM `r_player` WHERE (`id`='".$jam2['i1']."' OR `id`='".$jam2['i2']."' OR `id`='".$jam2['i3']."' 
+                           OR `id`='".$jam2['i4']."' OR `id`='".$jam2['i5']."' OR `id`='".$jam2['i6']."' 
+                           OR `id`='".$jam2['i7']."' OR `id`='".$jam2['i8']."' OR `id`='".$jam2['i9']."' 
+                           OR `id`='".$jam2['i10']."' OR `id`='".$jam2['i11']."') 
+                           AND `team`='".$jam2['id']."' AND `sostav`!='4'");
+        $myrow2 = $result2 ? mysqli_fetch_row($result2) : [];
 
-            // Брендовые кубки
-            displayCupNotification('b', 1, 1, 0, '/brendcup', true);
-            displayCupNotification('b', 2, 2, 0, '/brendcup', true);
-            displayCupNotification('b', 3, 15, 0, '/brendcup', true);
-
-            // Коммерческие кубки
-            displayCupNotification('z', 1, 1, 0, '/commercup', true);
-            displayCupNotification('z', 2, 2, 0, '/commercup', true);
-            displayCupNotification('z', 3, 3, 0, '/commercup', true);
-            displayCupNotification('z', 4, 4, 0, '/commercup', true);
-            displayCupNotification('z', 5, 15, 0, '/commercup', true);
-            ?>
-
-            <style>
-            input[type="button1"]:hover, input[type~="button1"]:hover, a.button1:hover {
-                color: #fff;
-                text-align: center;
-                outline: medium none;
-                background: -moz-linear-gradient(top,#8dc893,#31a424);
-                background: -webkit-gradient(linear,left top,left bottom,from(#31a424),to(#31a424));
-                background: -o-linear-gradient(top,#8dc893,#31a424);
-                box-shadow: inset 0px 1px 0px 0px #31a424;
-                -webkit-box-shadow: inset 0 1px 0 0 #31a424;
-                font-weight: bold;
-                font-size: 11px;
-                background-color: #F2B54B;
-                border: 0px solid #fff;
-                text-decoration: none;
-                cursor: pointer;
-                margin: 3px;
-                white-space: nowrap;
-            }
-            input[type="button1"], input[type~="button1"], a.button1 {
-                color: #fff;
-                text-align: center;
-                outline: medium none;
-                background: -moz-linear-gradient(top,#8dc893,#31a424);
-                background: -webkit-gradient(linear,left top,left bottom,from(#8dc893),to(#31a424));
-                background: -o-linear-gradient(top,#8dc893,#31a424);
-                box-shadow: inset 0px 1px 0px 0px #31a424;
-                -webkit-box-shadow: inset 0 1px 0 0 #31a424;
-                font-weight: bold;
-                padding: 5px 20px 30px 20px;
-                font-size: 11px;
-                background-color: #F2B54B;
-                border: 0px solid #fff;
-                text-decoration: none;
-                cursor: pointer;
-                position: relative;
-                margin: 3px;
-                white-space: nowrap;
-            }
-
-            .button1 {
-                display: inline-block;
-                color: white;
-                font-weight: bold;
-                padding: 3px;
-                font-size: 10px;
-                background-color: #8dc893;
-                border: 1px solid #31a424;
-                border-radius: 3px;
-            }
-
-            .menu {
-                background: #fff url(images/menu.gif) repeat-x bottom;
-                border-bottom: 1px solid #d6d6d6;
-                color: #222;
-                margin: 0;
-                margin-bottom: 1px;
-                padding: 9px;
-            }
-
-            .fmantext {
-                background: #fff;
-                padding: 5px 3px;
-                font-size: 10px;
-                color: #000;
-                border: 1px solid #999999;
-                text-align: center;
-                position: absolute;
-                left: 0;
-                bottom: 0;
-                width: 91.9%;
-                outline: medium none;
-                opacity: 0.9;
-            }
-
-            @media (min-width: 640px) {
-                #content3 {
-                    width: 70%;
-                    float: left;
-                }
-                #sidebar3 {
-                    width: 30%;
-                    float: right;
-                }
-            }
-
-            div.team_name7 {
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-
-            .counts {
-                float: right;
-                background: #E3E8EA;
-                padding: 1px 1px;
-                border-radius: 3px;
-                font-size: 10px;
-                font-weight: bold;
-                color: #e0321e;
-                box-shadow: inset 0 1px 1px rgb(0 0 0 / 10%);
-            }
+        if ($myrow2 && count($myrow2) < 11) {
+            echo $jam2['name'].' У вас меньше 11 игроков<br>';
             
-            </style>
-
-            <?php 
-            echo '<div class="gmenu" id="content3">';
-
-            // Club section
-            echo '<div class="phdr game-tour-holder"><i class="fi fi-pos x-color-dg"></i> <b>'.htmlspecialchars($club).'</b></div>';
-            echo '<div class="c" align="center">
-                    <a class="button1" href="/team/'.$kom['id'].'"><img style="width:56px" src="/images/menu2/team.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($komanda).'</div></span></a>
-                    <a class="button1" href="/team/sostav.php"><img style="width:56px" src="/images/menu2/template.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($sostav).'</div></span></a>
-                    <a class="button1" href="/team/train.php"><img style="width:56px" src="/images/menu2/trening.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($trener).'<span class="counts" style="color:red;">28</span></div></span></a>
-                    <a class="button1" href="/team/train.php?act=tren"><img style="width:56px" src="/images/menu2/trening_buy.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($tren1).'</div></span></a>
-                    <a class="button1" href="/team/tactic.php"><img style="width:56px" src="/images/menu2/transfer.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($taktika).'</div></span></a>
-                  </div>';
-
-            // Matches section
-            $totalij = mysql_result(mysql_query("SELECT COUNT(*) FROM `taklif_ijara` WHERE beruvchi='".$datauser['manager2']."'"), 0);
-
-            echo '<div class="phdr game-tour-holder"><i class="fi fi-cup x-color-dg"></i> <b>'.htmlspecialchars($match).'</b></div>';
-            echo '<div class="c" align="center">
-                    <a class="button1" href="/friendly/"><img style="width:56px" src="/images/menu2/tov.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($frendly2).'</div></span></a>';
-
-            // Determine tournament ID based on team level
-            $tid = ($kom['level'] <= 3) ? $kom['level'] : ($kom['level'] == 4 ? 4 : 5);
-            $bid = ($kom['level'] <= 3) ? 1 : 2;
-
-            echo '<a class="button1" href="/tournament/index.php?id='.$tid.'"><img style="width:56px" src="/images/menu2/tournament.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($r_kuboklar).'</div></span></a>
-                  <a class="button1" href="/champ/"><img style="width:56px" src="/images/menu2/chemp.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($champ).'</div></span></a>';
-
-            if($datauser['mir'] == 'retro80') {
-                echo '<a class="button1" href="/maradona/"><img style="width:56px" src="/images/menu2/ligan.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($maradona_cup2).'</div></span></a>';
+            $sql = mysqli_query($db, "SELECT * FROM `r_team` WHERE `id`='".$game['id_team2']."' LIMIT 1");
+            if(mysqli_num_rows($sql)) {
+                $team = mysqli_fetch_assoc($sql);
+                for($i = 1; $i <= 11; $i++) {
+                    if(!$team['i'.$i]) {
+                        if($i == 1) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team2']."' AND `line`='1' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        } elseif($i >= 2 && $i <= 4) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team2']."' AND `line`='2' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        } elseif($i >= 5 && $i <= 9) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team2']."' AND `line`='3' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        } elseif($i >= 10 && $i <= 11) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team2']."' AND `line`='4' AND `sostav`='0' ORDER BY `rm` DESC LIMIT 1");
+                        }
+                        
+                        if(!mysqli_num_rows($sql)) {
+                            $sql = mysqli_query($db, "SELECT `id` FROM `r_player` WHERE `team`='".$game['id_team2']."' AND `sostav`='0' AND `line`!='1' ORDER BY `rm` LIMIT 1");
+                        }
+                        
+                        if(mysqli_num_rows($sql)) {
+                            $player = mysqli_fetch_assoc($sql);
+                            mysqli_query($db, "UPDATE `r_team` SET `i$i`='".$player['id']."' WHERE `id`='".$game['id_team2']."' LIMIT 1");
+                            mysqli_query($db, "UPDATE `r_player` SET `sostav`='1' WHERE `id`='".$player['id']."' LIMIT 1");
+                        }
+                    }
+                }
             }
-
-            if($datauser['mir'] == 'retro80') {
-                echo '<a class="button1" href="/fedcup/"><img style="width:56px" src="/images/menu2/nation.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($fedcups2).'</div></span></a>';
-            } elseif($datauser['mir'] == 'retro2000') {
-                echo '<a class="button1" href="/fedcup2/"><img style="width:56px" src="/images/menu2/nation.png"><span class="fmantext"><div class="team_name7">'.htmlspecialchars($fedcups2).'</div></span></a>';
-            }
-            $tototal = mysql_num_rows(mysql_query("SELECT * FROM `r_frend` WHERE id_team2='".$datauser['manager2']."' AND id_team1>'0'"));
-
-            echo '<a class="button1" href="/evrocups/"><img style="width:56px" src="/images/menu2/cup_uefa_lc_80.png"><span class="fmantext"><div class="team_name7">'.$eurocup.'</div></span></a>
-                  <a class="button1" href="/union/vsch.php"><img style="width:56px" src="/images/menu2/sncup.png"><span class="fmantext"><div class="team_name7">'.$vsch.'</div></span></a>
-                  <a class="button1" href="/paynetcup/index.php"><img style="width:56px" src="/images/menu2/cuppriz.png"><span class="fmantext"><div class="team_name7">'.$paynetcup.'</div></span></a>
-                  <a class="button1" href="/friendly/to.php"><img style="width:56px" src="/images/menu2/playnow.png"><span class="fmantext"><div class="team_name7">'.$frend_to2.' <span class="counts">'.$total.'</span></div></span></a>
-                  <a class="button1" href="/turnir/gold.php"><img style="width:56px" src="/images/menu2/archzal.png"><span class="fmantext"><div class="team_name7">'.$gold.'</div></span></a>
-                  <a class="button1" href="/history/'.$kom['id'].'"><img style="width:56px" src="/images/menu2/history.png"><span class="fmantext"><div class="team_name7">'.$arhivmatch.'</div></span></a>
-                  </div>';
-
-            // Communication section
-            $chatonltime = $realtime - 300;
-            $chatonline_u = mysql_result(mysql_query("SELECT COUNT(*) FROM `users` WHERE `lastdate` > $chatonltime AND `place` LIKE 'chat%'"), 0);
-            unset($_SESSION['fsort_id'], $_SESSION['fsort_users']);
-
-            $onltime = $realtime - 300;
-            $online_u2 = mysql_result(mysql_query("SELECT COUNT(*) FROM `users` WHERE `lastdate` > $onltime AND `place` LIKE 'forum%'"), 0);
-
-            echo '<div class="phdr game-tour-holder"><i class="fi fi-users x-color-dg"></i> <b>'.$obsheniya.'</b></div>';
-            echo '<div class="c" align="center">
-                    <a class="button1" href="/forum/"><img style="width:56px" src="/images/menu2/forum.png"><span class="fmantext"><div class="team_name7">'.$forum.($online_u2 >= 1 ? '<span class="counts">'.$online_u2.'</span>' : '').'</div></span></a>
-                    <a class="button1" href="/chat.php"><img style="width:56px" src="/images/menu2/chat.png"><span class="fmantext"><div class="team_name7">'.$chat.($chatonline_u >= 1 ? '<span class="counts">'.$chatonline_u.'</span>' : '').'</div></span></a>
-                    <a class="button1" href="/union/"><img style="width:56px" src="/images/menu2/union.png"><span class="fmantext"><div class="team_name7">'.$soyuz.'</div></span></a>
-                  </div>';
-
-            // Transfer section
-            echo '<div class="phdr game-tour-holder"><i class="fi fi-basket x-color-dg"></i> <b>'.$transfer.'</b></div>';
-            echo '<div class="c" align="center">';
-
-            $total = mysql_result(mysql_query("SELECT COUNT(*) FROM `r_player` WHERE `retro` ='".$datauser['mir']."' AND `t_money` != '0'"), 0);
-            $totalreal = mysql_result(mysql_query("SELECT COUNT(*) FROM `r_player_real` WHERE id != '0'"), 0);
-            $men_tak = mysql_num_rows(mysql_query("SELECT * FROM `taklif` WHERE `id` AND `oluvchi`='".$datauser['manager2']."'"));
-            $totalleg = mysql_result(mysql_query("SELECT COUNT(*) FROM `legend` WHERE id != '0'"), 0);
-
-            echo '<a class="button1" href="/transfer/"><img style="width:56px" src="/images/menu2/transfer.png"><span class="fmantext"><div class="team_name7">'.$transfer.'<span class="counts">'.$total.'</span></div></span></a>
-                  <a class="button1" href="/player/bookmark.php"><img style="width:56px" src="/images/menu2/agent.png"><span class="fmantext"><div class="team_name7">'.$bookmark2.'</div></span></a>
-                  <a class="button1" href="/fm/magazin.php"><img style="width:56px" src="/images/menu2/buy_pay.png"><span class="fmantext"><div class="team_name7"><b>'.$magazin.'</b></div></span></a>
-                  <a class="button1" href="/player/shop.php"><img style="width:56px" src="/images/menu2/mne.png"><span class="fmantext"><div class="team_name7">'.$realplayer2.'<span class="counts">'.$totalreal.'</span></div></span></a>
-                  <a class="button1" href="/transfer/taklif.php"><img style="width:56px" src="/images/menu2/my.png"><span class="fmantext"><div class="team_name7">Покупки<span class="counts">'.$men_tak.'</span></div></span></a>
-                  <a class="button1" href="/ijara/"><img style="width:56px" src="/images/menu2/who_arend.png"><span class="fmantext"><div class="team_name7">'.$ijr.'<span class="counts">'.$totalij.'</span></div></span></a>';
-
-            if(!$kom['retro']) {
-                echo '<a class="button1" href="/agent/"><img style="width:56px" src="/images/menu2/whereplay.png"><span class="fmantext"><div class="team_name7">'.$agent.'</div></span></a>';
-            }
-
-            echo '<a class="button1" href="/player/search.php"><img style="width:56px" src="/images/menu2/search.png"><span class="fmantext"><div class="team_name7">'.$poiskplayer.'</div></span></a>
-                  <a class="button1" href="/team/search.php"><img style="width:56px" src="/images/menu2/search2.png"><span class="fmantext"><div class="team_name7">'.$poiskclub.'</div></span></a>
-                  </div>';
-
-            // Office section
-            echo '<div class="phdr game-tour-holder"><i class="fi fi-attach x-color-dg"></i> <b>'.$ofis.'</b></div>';
-            echo '<div class="c" align="center">
-                    <a class="button1" href="../serv_manager.php?act=menu&amp;id='.$kom['id'].'"><img style="width:56px" src="/images/menu2/settings.png"><span class="fmantext"><div class="team_name7">'.$servis.'</div></span></a>
-                    <a class="button1" href="/str/zadanie.php"><img style="width:56px" src="/images/menu2/task.png"><span class="fmantext"><div class="team_name7">'.$topshiriqlar2.'</div></span></a>
-                    <a class="button1" href="/staff/"><img style="width:56px" src="/images/menu2/staff.png"><span class="fmantext"><div class="team_name7">'.$personal.'</div></span></a>
-                    <a class="button1" href="/buildings/baza.php"><img style="width:56px" src="/images/menu2/baza.png"><span class="fmantext"><div class="team_name7">'.$baza.'</div></span></a>
-                    <a class="button1" href="/buildings/stadium.php?id='.$kom['id'].'"><img style="width:56px" src="/images/menu2/std.png"><span class="fmantext"><div class="team_name7">'.$stadion.'</div></span></a>
-                    <a class="button1" href="/totalizator/"><img style="width:56px" src="/images/menu2/bet.png"><span class="fmantext"><div class="team_name7">'.$turnir1x2.'</div></span></a>
-                    <a class="button1" href="/rating/"><img style="width:56px" src="/images/menu2/uefa.png"><span class="fmantext"><div class="team_name7">'.$rating.'</div></span></a>
-                    <a class="button1" href="/referal.php"><img style="width:56px" src="/images/menu2/rait.png"><span class="fmantext"><div class="team_name7">'.$referal.'</div></span></a>';
-
-            // Calculate trophies count
-            $total = mysql_result(mysql_query("SELECT COUNT(*) FROM `r_priz` WHERE win = '".$datauser['manager2']."'"), 0);
-            $total55 = mysql_result(mysql_query("SELECT COUNT(*) FROM `r_priz` WHERE win = '".$datauser['mtj']."'"), 0);
-            $total56 = mysql_result(mysql_query("SELECT COUNT(*) FROM `r_priz_player` WHERE `id_cup`='goldglow' AND team = '".$datauser['manager2']."'"), 0);
-            $total57 = mysql_result(mysql_query("SELECT COUNT(*) FROM `r_priz_player` WHERE `id_cup`='goldball' AND team = '".$datauser['manager2']."'"), 0);
-            $total58 = mysql_result(mysql_query("SELECT COUNT(*) FROM `r_priz_player` WHERE `id_cup`='goldbutsa' AND team = '".$datauser['manager2']."'"), 0);
-            $ttt = $total + $total55 + $total56 + $total57 + $total58;
-
-            echo '<a class="button1" href="/team/trophies.php"><img style="width:56px" src="/images/menu2/raitplayer.png"><span class="fmantext"><div class="team_name7">'.$trofey.'<span class="counts">'.$ttt.'</span></div></span></a>
-                  <a class="button1" href="/team/news.php?id='.$kom['id'].'"><img style="width:56px" src="/images/menu2/newsman.png"><span class="fmantext"><div class="team_name7">'.$news.'</div></span></a>';
-
-            if($kom['mir'] == 'retro80' || $kom['mir'] == 'retro2000') {
-                echo '<a class="button1" href="/str/cont1.php?act=delman&amp;id='.$kom['id'].'"><img style="width:56px" src="/images/menu2/del.png"><span class="fmantext"><div class="team_name7">'.$uvol.'</div></span></a>';
-            } else {
-                echo '<a class="button1" href="/str/cont1.php?act=delmans&amp;id='.$kom['id'].'"><img style="width:56px" src="/images/menu2/del.png"><span class="fmantext"><div class="team_name7">'.$uvol.'</div></span></a>';
-            }
-
-            echo '</div></div>';
-
-            // Sidebar chat
-            echo '<aside class="gmenu" id="sidebar3">';
-            require('../chat2.php');
-            echo '</aside>';
-
-            echo '<table class="team_table_pad" id="generallist"><tbody><tr></tr></tbody></table></table>';
-
-        } else {
-            // Команда не найдена в базе
-            echo '<div class="phdr"><center><b>Ваша команда не найдена</b></center></div>';
-            echo '<div class="menu"><a href="/store_teams.php">Добавить новую команду</a></div>';
-        }
-    } else {
-        // Пользователь не имеет команды - показываем интерфейс для выбора/создания команды
-        echo '<div class="phdr"><center><b>Добро пожаловать в футбольный менеджер</b></center></div>';
-
-        // Проверяем, есть ли у пользователя команда в другом режиме
-        $has_team = false;
-        $qkws = mysql_query("SELECT * FROM `r_team` WHERE id='".$datauser['manager2']."' LIMIT 1");
-        if (mysql_num_rows($qkws)) {
-            $mtjs = mysql_fetch_array($qkws);
-            $has_team = true;
-        }
-        
-        $qkw = mysql_query("SELECT * FROM `mtj` WHERE id='".$datauser['mtj']."' LIMIT 1");
-        if (mysql_num_rows($qkw)) {
-            $mtj = mysql_fetch_array($qkw);
-            $has_team = true;
         }
 
-        echo '<div class="lt3">';
-        if(!$datauser['manager2']) {
-            echo '<a href="/store_teams.php"><div class="team-add">добавить команду<br><span style="font-size: 18px;">1</span></div></a>';
-        } else {
-            echo '<a href="/fm/?mod=team"><div class="b">
-                    <img src="/manager/logo/big'.$mtjs['logo'].'" style="width: 37px; height: 37px;" title="Перейти в управление клубом '.$mtjs['name'].'" alt="'.$mtjs['name'].'">
-                  </div></a>';
-        }
-        
-        if(!$datauser['mtj']) {
-            echo '<a href="/store_teams2.php"><div class="team-add">добавить команду<br><span style="font-size: 18px;">2</span></div></a>';
-        } else {
-            echo '<a href="/fm/?mod=mtj"><div class="b">
-                    <img src="/manager/mtj/big'.$mtj['logo'].'" style="width: 37px; height: 37px;" title="Перейти в управление клубом '.$mtj['name'].'" alt="'.$mtj['name'].'">
-                  </div></a>';
-        }
-        echo '</div>';
-
-        // Выбор мира игры
-        switch ($datauser['mir']) {
-            case "virt":
-                echo '<a href="?mod=mir80"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bc-li1 x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 80-х</a></span>
-                      <a href="?mod=mir2000"><span class="x-bg-bronse x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 00-х</a></span>
-                      </div>';
-                
-                echo '<div class="phdr"><center><b>Выберите уникальное название Вашей команды</b></center></div>
-                      <div style="max-width:280px; margin:0px auto; padding-top:20px;" bis_skin_checked="1">
-                      <div class="gmenu"><div class="row-input"><center><form action="/addteam.php" method="post">
-                      <b></b>Название команды:<br/><input type="text" name="nameteam" value=""/><br/>
-                      <b>Страна команды:</b><br/>
-                      <select name="flag">
-                        <option value="ru">Россия</option>
-                        <option value="ua">Украина</option>
-                        <option value="en">Англия</option>
-                        <option value="it">Италия</option>
-                        <option value="sp">Испания</option>
-                        <option value="ge">Германия</option>
-                        <option value="fr">Франция</option>
-                        <option value="nl">Голландия</option>
-                      </select><br/>
-                      <b>Выбор мира:</b><br/>
-                      <select name="mir">
-                        <option value="1">1 мир</option>
-                        <option value="2">2 мир</option>
-                        <option value="3">3 мир</option>
-                      </select><br/>
-                      <input type="submit" title="Нажмите чтобы начать игру" name="submit" value="Создать"/></form></center>
-                      </div></div></div>';
-                
-                echo '<div class="cardview" bis_skin_checked="1">
-                      <div class="x-row" bis_skin_checked="1">
-                        <div class="x-col-1 x-vh-center x-font-250 x-color-white x-bg-green" bis_skin_checked="1">
-                          <i class="font-icon font-icon-whistle"></i>
-                        </div>
-                        <div class="x-col-5 x-p-3" bis_skin_checked="1">
-                          <div class="" bis_skin_checked="1">Название может содержать либо только символы русского и украинского алфавитов, или только английского длиной не более 20 символов!</div>
-                        </div>
-                      </div>
-                      </div>';
-                break;
-                
-            case "retro80":
-                echo '<a href="?mod=mir80"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bc-li1 x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 80-х</a></span>
-                      <a href="?mod=mir2000"><span class="x-bg-bronse x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 00-х</a></span>
-                      </div>';
-                
-                echo '<img src="/images/mir/retro80.jpg" style="width: 100%; height: 50%;">
-                      <p><b>Что тебя ожидает?</b></p>
-                      <ul><li>Сотни ретро-клубов 80-х из самых ведущих футбольных стран!</li></ul>
-                      <ul><li>Больше 50-ти ретро-сборных 80-х!</li></ul>
-                      <ul><li>Тысячи ретро игроков 80-х, которых можно прокачивать!</li></ul>
-                      <ul><li>Ретро Чемпионат Европы. И Чемпионат Мира!</li></ul>
-                      <ul><li>Кубок Европейских Чемпионов, Кубок УЕФА, Кубок Интертото и многие ретро турниры!</li></ul>
-                      <a href="/auction.php"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bg-orange x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Аукцион!!!</a></span>
-                      <a href="/store_teams.php"><span class="x-bg-green x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Магазин!!!</a></span></div>';
-                break;
-                
-            case "retro2000":
-                echo '<a href="?mod=mir80"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bc-li1 x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 80-х</a></span>
-                      <a href="?mod=mir2000"><span class="x-bg-bronse x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 00-х</a></span>
-                      </div>';
-                
-                echo '<img src="/images/mir/retro2000.jpg" style="width: 100%; height: 50%;">
-                      <p><b>Что тебя ожидает?</b></p>
-                      <ul><li>Сотни ретро-клубов 00-х из самых ведущих футбольных стран!</li></ul>
-                      <ul><li>Больше 50-ти ретро-сборных 00-х!</li></ul>
-                      <ul><li>Тысячи ретро игроков 00-х, которых можно прокачивать!</li></ul>
-                      <ul><li>Ретро Чемпионат Европы. И Чемпионат Мира!</li></ul>
-                      <ul><li>Лига Чемпионов, Кубок УЕФА, Кубок Интертото и многие ретро турниры!</li></ul>
-                      <a href="/auction.php"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bg-orange x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Аукцион!!!</a></span>
-                      <a href="/store_teams.php"><span class="x-bg-green x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Магазин!!!</a></span></div>';
-                break;
-                
-            default:
-                echo '<a href="?mod=mir80"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bc-li1 x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 80-х</a></span></div>
-                      <a href="?mod=mir2000"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bg-bronse x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Ретро Мир 00-х</a></span></div>
-                      <a href="/auction.php"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bg-orange x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Аукцион!!!</a></span></div>
-                      <a href="/store_teams.php"><div class="x-my-3 x-text-center x-font-bold" bis_skin_checked="1"><span class="x-bg-green x-px-3 x-py-2 x-font-75 x-color-white x-rounded-3"><i class="fi fi-user"></i> Магазин!!!</a></span></div>';
-                break;
-        }
+      //  ++$kmess;
+      //  ++$stgame;
+      //  ++$i;
+        require_once ("../incfiles/end.php");
+        exit;
     }
 } else {
-    // Пользователь не авторизован
-    echo '<div class="phdr"><center><b>Для доступа к менеджеру необходимо авторизоваться</b></center></div>';
-    echo '<div class="menu"><a href="/login.php">Войти</a> | <a href="/registration.php">Зарегистрироваться</a></div>';
+    // Игра подтверждена
+    echo '<div class="rmenu">Обе команды подтвердили участие. Матч начнется '.date('d.m.Y H:i', $game['time']).'.</div>';
+
+    // Вывод состава команд
+    echo '<div class="phdr orangebk"><center><b>Состав</b></center></div>';
+    echo '<div class="gmenu"><table width="100%"><tr><td width="50%" valign="top">';
+
+    echo '<b>'.$kom1['name'].'</b><br>';
+    $players1 = mysqli_query($db, "SELECT * FROM `r_player` WHERE `team`='".$kom1['id']."' AND `sostav`='1' ORDER BY `line` ASC, `poz` ASC");
+    if ($players1) {
+        while ($player = mysqli_fetch_assoc($players1)) {
+            echo $player['poz'] . '. <a href="/player/'.$player['id'].'">'.$player['name'].'</a><br>';
+        }
+    }
+
+    echo '</td><td width="50%" valign="top">';
+
+    echo '<b>'.$kom2['name'].'</b><br>';
+    $players2 = mysqli_query($db, "SELECT * FROM `r_player` WHERE `team`='".$kom2['id']."' AND `sostav`='1' ORDER BY `line` ASC, `poz` ASC");
+    if ($players2) {
+        while ($player = mysqli_fetch_assoc($players2)) {
+            echo $player['poz'] . '. <a href="/player/'.$player['id'].'">'.$player['name'].'</a><br>';
+        }
+    }
+
+    echo '</td></tr></table></div>';
 }
 
-// Если у пользователя есть сборная, перенаправляем на соответствующую страницу
-// На этот:
-if (!empty($datauser['mtj']) && $datauser['club'] == 'mtj') {
-    header('Location: /fm/index2.php');
-    exit;
+// Таймер обновления страницы
+if ($game['time'] > $realtime) {
+    $ostime = $game['time'] - $realtime;
+    echo '<meta http-equiv="refresh" content="60;url=/game'.$dirs.$id.'"/>';
+    echo '<center><div class="info">Матч начнется через: '.date("i:s", $ostime).'</div></center>';
+} else {
+    echo '<center><div class="info">Матч скоро начнется</div></center>';
 }
 
-require_once('../incfiles/end.php');
+// Проверка дисквалификаций (только для champ_retro)
+if ($game['chemp'] == 'champ_retro') {
+    $test1 = mysqli_query($db, "SELECT * FROM `r_player` WHERE (`id`='".$kom1['i1']."' OR `id`='".$kom1['i2']."' OR `id`='".$kom1['i3']."' 
+                     OR `id`='".$kom1['i4']."' OR `id`='".$kom1['i5']."' OR `id`='".$kom1['i6']."' 
+                     OR `id`='".$kom1['i7']."' OR `id`='".$kom1['i8']."' OR `id`='".$kom1['i9']."' 
+                     OR `id`='".$kom1['i10']."' OR `id`='".$kom1['i11']."') 
+                     AND `team`='".$kom1['id']."' LIMIT 11");
+    
+    if ($test1) {
+        while ($pidr = mysqli_fetch_array($test1)) {
+            if ($pidr['utime'] > 0) {
+                mysqli_query($db, "UPDATE `r_player` SET `sostav`='4' WHERE `id`='".$pidr['id']."'");
+                for($i = 1; $i <= 11; $i++) {
+                    mysqli_query($db, "UPDATE `r_team` SET `i".$i."`='' WHERE `i".$i."`='".$pidr['id']."'");
+                }
+                echo '<div class ="error">Мы убрали '.$pidr['name'].' из состава. У него дисквалификация</div>';
+            }
+        }
+    }
+    
+    $test2 = mysqli_query($db, "SELECT * FROM `r_player` WHERE (`id`='".$kom2['i1']."' OR `id`='".$kom2['i2']."' OR `id`='".$kom2['i3']."' 
+                     OR `id`='".$kom2['i4']."' OR `id`='".$kom2['i5']."' OR `id`='".$kom2['i6']."' 
+                     OR `id`='".$kom2['i7']."' OR `id`='".$kom2['i8']."' OR `id`='".$kom2['i9']."' 
+                     OR `id`='".$kom2['i10']."' OR `id`='".$kom2['i11']."') 
+                     AND `team`='".$kom2['id']."' LIMIT 11");
+    
+    if ($test2) {
+        while ($pidr2 = mysqli_fetch_array($test2)) {
+            if ($pidr2['utime'] > 0) {
+                mysqli_query($db, "UPDATE `r_player` SET `sostav`='4' WHERE `id`='".$pidr2['id']."'");
+                for($i = 1; $i <= 11; $i++) {
+                    mysqli_query($db, "UPDATE `r_team` SET `i".$i."`='' WHERE `i".$i."`='".$pidr2['id']."'");
+                }
+                echo '<div class ="error">Мы убрали '.$pidr2['name'].' из состава. У него дисквалификация</div>';
+            }
+        }
+    }
+}
+
+require_once ("../incfiles/end.php");
+exit;
 ?>
